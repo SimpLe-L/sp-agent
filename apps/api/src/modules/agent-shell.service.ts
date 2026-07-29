@@ -11,13 +11,15 @@ import type { LocalSkillRecord } from "@sp-agent/shared";
 import { ChatService } from "./chat.service.js";
 import { ExtensionsService } from "./extensions.service.js";
 import { LocalSkillsService } from "./local-skills.service.js";
+import { MemoryService } from "./memory.service.js";
 
 @Injectable()
 export class AgentShellService {
   constructor(
     @Inject(ExtensionsService) private readonly extensionsService: ExtensionsService,
     @Inject(LocalSkillsService) private readonly localSkillsService: LocalSkillsService,
-    @Inject(ChatService) private readonly chatService: ChatService
+    @Inject(ChatService) private readonly chatService: ChatService,
+    @Inject(MemoryService) private readonly memoryService: MemoryService
   ) {}
 
   async getStatus(): Promise<AgentShellStatus> {
@@ -35,7 +37,7 @@ export class AgentShellService {
         default: adapter.default
       })),
       safetyModel: extensionStatus.safetyModel,
-      extensions: [...extensionStatus.extensions, ...localSkills.map(toLocalSkillManifest)]
+      extensions: [...extensionStatus.extensions, ...localSkills.map(toLocalSkillManifest)] as unknown as AgentShellStatus["extensions"]
     };
   }
 
@@ -99,43 +101,62 @@ export class AgentShellService {
       content: input.content,
       metadata
     });
-    // Phase one deliberately keeps durable memory outside the runtime context.
-    const memoryContext: MemorySearchResult[] = [];
-    const allowedExtensions =
+    const memoryContext = (await this.memoryService.retrieveForAgent({ query: input.content, sessionId: session.id, limit: 8 })).memories;
+    const conversationHistory = boundedConversationHistory(session.messages ?? []);
+    const allowedExtensions: ExtensionManifest[] =
       input.extensionIds.length > 0
         ? extensionStatus.extensions.filter((extension) => input.extensionIds.includes(extension.id))
         : [...extensionStatus.extensions, ...localSkills.map(toLocalSkillManifest)];
-    const agentVisibleExtensions = allowedExtensions
-      .map((extension) => ({
-        ...extension,
-        capabilities: extension.capabilities.filter((capability) =>
-          extension.id.startsWith("local.skill.") || this.extensionsService.getInvocationAudit(extension.id, capability.id).allowed
-        )
-      }))
-      .filter((extension) => extension.capabilities.length > 0) as ExtensionManifest[];
-    let loadedLocalSkillId: string | undefined;
+    const agentVisibleExtensions = (
+      await Promise.all(
+        allowedExtensions.filter((extension) => extension.status === "active").map(async (extension) => {
+          const capabilities = (
+            await Promise.all(
+              extension.capabilities.map(async (capability) => ({
+                capability,
+                audit: extension.id.startsWith("local.skill.") ? undefined : await this.extensionsService.getInvocationAudit(extension.id, capability.id)
+              }))
+            )
+          )
+            .filter(({ audit }) => !audit || audit.allowed)
+            .map(({ capability }) => capability);
+          return { ...extension, capabilities };
+        })
+      )
+    ).filter((extension) => extension.capabilities.length > 0) as unknown as ExtensionManifest[];
+    // This grant is fixed for the whole turn. Later Skill selection narrows it;
+    // it can never make an undisclosed capability available.
+    const turnGrant = createTurnCapabilityGrant(agentVisibleExtensions, localSkills);
     const turnInput: PersonalAgentTurnInput = {
       message: input.content,
       sessionId: session.id,
+      conversationHistory,
       memoryContext,
       extensionManifests: agentVisibleExtensions,
       safetyModel: extensionStatus.safetyModel,
       extensionInvoker: async (request) => {
-        if (request.extensionId.startsWith("local.skill.")) loadedLocalSkillId = request.extensionId.slice("local.skill.".length);
-        if (loadedLocalSkillId && !request.extensionId.startsWith("local.skill.")) {
-          const skill = await this.localSkillsService.get(loadedLocalSkillId);
-          const requestedTool = `${request.extensionId}.${request.capabilityId}`;
-          if (!skill.requestedTools.includes(requestedTool)) {
-            return { ok: false, status: "denied", degradedReason: `Local Skill ${loadedLocalSkillId} did not declare ${requestedTool}.` };
+        const requestedTool = `${request.extensionId}.${request.capabilityId}`;
+        if (!turnGrant.visible.has(requestedTool)) {
+          return { ok: false, status: "denied", degradedReason: "This capability was not granted for the current agent turn." };
+        }
+        if (request.extensionId.startsWith("local.skill.")) {
+          const skillId = request.extensionId.slice("local.skill.".length);
+          if (!turnGrant.skills.has(skillId)) return { ok: false, status: "denied", degradedReason: "This Skill was not granted for the current agent turn." };
+          const target = turnGrant.skills.get(skillId)?.targets.get(request.capabilityId);
+          if (target) {
+            return this.invokeAgentExtension(
+              { extensionId: target.extensionId, capabilityId: target.capabilityId, input: request.input },
+              { sessionId: session.id, runtimeId: process.env.AGENT_RUNTIME_PROVIDER ?? "pi", skillId }
+            );
           }
         }
-        return this.invokeAgentExtension(request);
+        return this.invokeAgentExtension(request, { sessionId: session.id, runtimeId: process.env.AGENT_RUNTIME_PROVIDER ?? "pi" });
       }
     };
     return { sessionId: session.id, memoryContext, turnInput };
   }
 
-  private async invokeAgentExtension(request: PersonalAgentExtensionInvokeRequest) {
+  private async invokeAgentExtension(request: PersonalAgentExtensionInvokeRequest, context: { sessionId: string; runtimeId: string; skillId?: string }) {
     if (request.extensionId.startsWith("local.skill.")) {
       try {
         const skillId = request.extensionId.slice("local.skill.".length);
@@ -152,7 +173,7 @@ export class AgentShellService {
         return { ok: false, status: "failed", degradedReason: error instanceof Error ? error.message : "Local Skill could not be loaded." };
       }
     }
-    const audit = this.extensionsService.getInvocationAudit(request.extensionId, request.capabilityId);
+    const audit = await this.extensionsService.getInvocationAudit(request.extensionId, request.capabilityId);
     if (!audit.allowed) {
       return {
         ok: false,
@@ -164,8 +185,9 @@ export class AgentShellService {
     try {
       const response = await this.extensionsService.invoke(request.extensionId, {
         capabilityId: request.capabilityId,
-        input: request.input
-      });
+        input: request.input,
+        sessionId: context.sessionId
+      }, context);
       return {
         ok: !response.degradedReason,
         status: response.status,
@@ -202,10 +224,50 @@ export class AgentShellService {
   }
 }
 
+function createTurnCapabilityGrant(extensions: ExtensionManifest[], localSkills: LocalSkillRecord[]) {
+  const visibleTargets = new Map<string, { extensionId: string; capabilityId: string }>(
+    extensions
+      .filter((extension) => !extension.id.startsWith("local.skill."))
+      .flatMap((extension) => extension.capabilities.map((capability) => [`${extension.id}.${capability.id}`, { extensionId: extension.id, capabilityId: capability.id }] as const))
+  );
+  return {
+    visible: new Set(extensions.flatMap((extension) => extension.capabilities.map((capability) => `${extension.id}.${capability.id}`))),
+    skills: new Map(
+      localSkills
+        .filter((skill) => skill.status === "active")
+        .map((skill) => [
+          skill.id,
+          {
+            targets: new Map(
+              skill.requestedTools.flatMap((requestedTool, index) => {
+                const target = visibleTargets.get(requestedTool);
+                return target ? [[scopedSkillCapabilityId(index), target] as const] : [];
+              })
+            )
+          }
+        ])
+    )
+  };
+}
+
 function makeSessionTitle(content: string) {
   const clean = content.replace(/\s+/g, " ").trim();
   if (!clean) return "New Chat";
   return clean.length > 40 ? `${clean.slice(0, 40)}...` : clean;
+}
+
+function boundedConversationHistory(messages: Array<{ role: string; content: string }>) {
+  const budget = Number(process.env.SP_AGENT_RUNTIME_HISTORY_CHARS ?? 12_000);
+  const selected: Array<{ role: "user" | "assistant"; content: string }> = [];
+  let used = 0;
+  for (const message of [...messages].reverse()) {
+    if ((message.role !== "user" && message.role !== "assistant") || !message.content.trim()) continue;
+    const content = message.content.slice(0, 2_000);
+    if (used + content.length > budget) break;
+    selected.push({ role: message.role, content });
+    used += content.length;
+  }
+  return selected.reverse();
 }
 
 function toMemoryContextDebug(memory: MemorySearchResult) {
@@ -244,7 +306,19 @@ function toLocalSkillManifest(skill: LocalSkillRecord): ExtensionManifest {
         permissions: ["skills:read"],
         inputSchema: "{ path: string }",
         outputSchema: "{ path: string, content: string }"
-      }
+      },
+      ...skill.requestedTools.map((tool, index) => ({
+        id: scopedSkillCapabilityId(index),
+        label: tool,
+        description: `Invoke declared API capability ${tool} through ${skill.name}.`,
+        permissions: ["skills:invoke"],
+        inputSchema: "record",
+        outputSchema: "extension invocation result"
+      }))
     ]
   };
+}
+
+function scopedSkillCapabilityId(index: number) {
+  return `skill.invoke.${index}`;
 }

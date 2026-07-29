@@ -24,6 +24,16 @@ import { VoiceController } from "./voice.controller.js";
 import { VoiceService } from "./voice.service.js";
 import { WorkflowsController } from "./workflows.controller.js";
 import { WorkflowsService } from "./workflows.service.js";
+import { WorkspaceService } from "./workspace.service.js";
+import { LangGraphWorkflowEngine } from "./langgraph-workflow-engine.service.js";
+import { SkillScriptService } from "./skill-script.service.js";
+import { CapabilityAuditService } from "./capability-audit.service.js";
+import { CapabilityAuditController } from "./capability-audit.controller.js";
+import { McpController } from "./mcp.controller.js";
+import { McpService } from "./mcp.service.js";
+import { SpeechIoService } from "./speech-io.service.js";
+import { ArtifactService } from "./artifact.service.js";
+import { WebService } from "./web.service.js";
 
 @Module({
   controllers: [
@@ -37,7 +47,9 @@ import { WorkflowsService } from "./workflows.service.js";
     LocalSkillsController,
     ApprovalsController,
     WorkflowsController,
-    VoiceController
+    VoiceController,
+    CapabilityAuditController,
+    McpController
   ],
   providers: [
     LocalJsonStore,
@@ -52,6 +64,14 @@ import { WorkflowsService } from "./workflows.service.js";
     ExtensionsService,
     ApprovalsService,
     WorkflowsService,
+    WorkspaceService,
+    LangGraphWorkflowEngine,
+    SkillScriptService,
+    CapabilityAuditService,
+    McpService,
+    ArtifactService,
+    WebService,
+    SpeechIoService,
     VoiceAuditService,
     VoiceService
   ]

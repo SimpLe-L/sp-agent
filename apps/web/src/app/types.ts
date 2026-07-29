@@ -19,6 +19,9 @@ export type ExtensionCapability = {
   label: string;
   description: string;
   permissions: string[];
+  effects?: Array<"read" | "local_write" | "provider_call" | "external_write" | "credential" | "destructive">;
+  riskLevel?: "low" | "medium" | "high" | "critical";
+  executionPolicy?: "auto" | "single_approval" | "session_approval" | "always_deny";
   inputSchema?: string;
   outputSchema?: string;
 };
@@ -140,7 +143,7 @@ export type WorkflowNodeEvent = {
   id: string;
   nodeId: string;
   label: string;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
   payload: Record<string, unknown>;
   error?: string;
   degradedReason?: string;
@@ -152,7 +155,7 @@ export type WorkflowNodeEvent = {
 export type WorkflowRun = {
   id: string;
   kind: string;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "paused" | "completed" | "failed" | "cancelled";
   input: Record<string, unknown>;
   result?: unknown;
   degradedReason?: string;
@@ -161,6 +164,10 @@ export type WorkflowRun = {
   updatedAt: string;
   startedAt?: string;
   completedAt?: string;
+  checkpoint?: { nodeId: string; data: Record<string, unknown>; updatedAt: string };
+  attempt?: number;
+  maxRetries?: number;
+  correlationId?: string;
   nodeEvents: WorkflowNodeEvent[];
 };
 

@@ -4,7 +4,7 @@
 
 SP Agent is a local-first, chat-first trusted development agent. Users chat normally, install complete third-party Skill packages, and let the local API execute ordinary development work without a per-action approval queue. `personal.research` is one reusable Skill, not the product boundary.
 
-Importing a third-party package never executes its code. In trusted local mode, ordinary package reads, local writes, and provider calls run directly and remain auditable. Credentials, private keys, external account actions, payments, and irreversible destructive operations stay explicitly approval-gated.
+Importing a third-party package never executes its code. In trusted local mode, ordinary package reads, workspace writes, document exports, public-web retrieval, and provider calls run directly and remain auditable. Credentials, private keys, external account actions, payments, and irreversible destructive operations stay explicitly approval-gated.
 
 ## Runtime Shape
 
@@ -13,11 +13,13 @@ Electron desktop shell
 -> React renderer using assistant-ui
 -> NestJS local API gateway
 -> runtime adapter registry, Pi first
--> local Skill catalog and API-owned tool execution
+-> local Skill catalog, managed MCP servers, and API-owned tool execution
 -> approvals, persistence, audit, and speech
 ```
 
-The API gateway is the control plane. It owns Skill import, validation, enablement, tool execution, approvals, persistence, provider readiness, and audit. Runtime adapters produce assistant turns and request typed tools; they do not execute privileged app behavior directly.
+The API gateway is the local capability host and control plane, not a per-action approval gate. It owns Skill import, validation, enablement, managed MCP lifecycle, typed tool execution, approvals, SQLite-backed persistence, provider readiness, and persistent capability audit. Runtime adapters produce assistant turns and request typed tools; they do not execute privileged app behavior directly. This keeps a third-party Runtime, Skill, or MCP transport from silently widening its own filesystem, process, credential, or account access while ordinary trusted-local work remains frictionless.
+
+The desktop shell generates a bearer token for its API child process. The API binds only to `127.0.0.1`, restricts CORS to the renderer origin when supplied, and rejects unauthenticated requests in desktop mode.
 
 ## Workspace
 
@@ -64,7 +66,7 @@ my-skill/
 
 Imported packages are complete local packages:
 
-- package scripts, references, templates, and static assets are retained; installation never executes them;
+- package scripts, references, templates, and static assets are retained; installation never executes them; JavaScript scripts may run only through the typed OS-sandbox capability, with network denial, package-root file scope, timeout, and output bounds;
 - symlinks and paths escaping the package root are rejected;
 - a Skill may read its own package references on demand and use the local capabilities exposed to it;
 - importing, enabling, disabling, and removing a package are auditable local actions.
@@ -75,7 +77,11 @@ This mirrors coding-agent Skills: instructions and references are loaded only wh
 
 `packages/extensions` remains the app-owned registry for executable capabilities. Each tool has a typed input/output contract, permission metadata, an API handler, and a `permissionAudit` result. A Skill may request a registered tool; it may not call a provider or connector implementation itself.
 
-Installed Skill files, user-selected local folders, and a user-submitted public GitHub repository import execute without a second approval prompt. Trusted local capabilities, including local writes and provider calls, execute directly and are audited. `pending_approval` is reserved for credentials/secrets, private keys, external account actions, payments, and irreversible destructive operations. Approval execution stays in the API and matches the same tool identity and input.
+Installed Skill files, user-selected local folders, and a user-submitted public GitHub repository import execute without a second approval prompt. Trusted local capabilities, including workspace writes, document exports, public-web retrieval, and provider calls, execute directly and are audited. `pending_approval` is reserved for credentials/secrets, private keys, external account actions, payments, and irreversible destructive operations. Approval execution stays in the API and matches the same tool identity and input.
+
+`local.artifacts` is the first-party export boundary: it generates Markdown and CSV inside the configured workspace and returns delivery metadata without an approval prompt. Complete document Skills may generate DOCX, XLSX, or PDF via their retained scripts, but those scripts run through the bounded Skill sandbox. `remote.web` is the first-party public-web boundary: it searches and reads public HTTP(S) content with URL credential rejection, private-network denial, redirect validation, timeout and response-size limits, normalized text, source identity, retrieval time, content hash, and explicit degradation. Neither capability grants arbitrary shell access, arbitrary local paths, direct MCP transport access, or credential use.
+
+Managed MCP servers are explicit local configuration. A server starts disabled, must be enabled before API-owned stdio discovery, and exposes discovered tools as dynamic Extension capabilities. The API runs each transport without inheriting desktop-process credentials, validates the supported JSON Schema subset, applies per-tool policy, and writes the same capability audit events used by built-in tools. Runtime adapters and Skills never start or connect to an MCP server directly.
 
 "Connector" is an implementation term, not a required product layer. Keep a connector as a separate typed tool only when an external source has independent authentication, rate/size limits, provenance, or reuse across Skills. Local parsing helpers and single-Skill adapters should stay private to that Skill handler.
 
@@ -88,18 +94,19 @@ Required:
 - lazy Skill-instruction loading and manifest-derived bounded tool context;
 - clear degraded states for unavailable Skills/tools;
 - deterministic routing and import/validation smoke coverage.
+- bounded public-web search and page reading with provenance and explicit degradation;
+- workspace-scoped Markdown and CSV artifact export without per-export approval.
 
 Explicitly deferred:
 
-- memory retrieval, memory injection, promotion, and memory UI in the chat path;
 - a dedicated planner service or provider planner;
-- remote search, arbitrary URL retrieval, credentialed connectors, and provider-backed research synthesis;
+- credentialed connectors, authenticated remote retrieval, and provider-backed research synthesis;
 - a marketplace and automatic package installation hooks;
-- multi-agent delegation, LangGraph, and background workflow orchestration.
+- background research and unrestricted multi-agent delegation beyond the bounded code-change workflow.
 
-## Memory, Research, And Workflows Later
+## Memory, Research, And Workflows
 
-Memory remains app-owned and auditable, but it is not supplied to the runtime or available as a Skill tool in phase one. Reintroduce it only with an explicit user-facing policy, typed read tool, provenance, and focused tests.
+Memory remains app-owned and auditable. The API retrieves only active, non-sensitive memories matching global or current-session scope, applies a bounded result budget, injects those citations into the Runtime context, and records the selected references with the assistant message. Durable writes enter as candidates and are auditable; Runtime adapters never write durable memory directly.
 
 When evidence-backed research becomes necessary, implement it as a capability of `personal.research`, not a new mandatory routing architecture:
 
@@ -111,7 +118,7 @@ personal.research instruction
 -> validate citations and persist an inspectable artifact
 ```
 
-Remote data, source-specific connectors, and durable workflows require a concrete product need, source scope, approval policy, provenance contract, degraded behavior, and deterministic fixtures. Add LangGraph only when durable pause/resume, fan-out, or revise/validate loops demonstrably exceed a bounded API handler.
+Remote data and source-specific connectors require a concrete product need, source scope, provenance contract, degraded behavior, and deterministic fixtures. Public unauthenticated web retrieval is a trusted-local capability; credentialed retrieval and external account mutations require explicit approval. The bounded code-change workflow uses a LangGraph routing adapter for Planner, Inspector, Executor, Tester, and Reviewer transitions. SQLite persists its checkpoint; stale code-change runs resume from that checkpoint after API restart, while paused approval runs remain paused. LangGraph owns graph routing only: checkpoints, approvals, artifacts, filesystem, commands, and audit remain API-owned.
 
 ## Renderer Contract
 
@@ -137,14 +144,4 @@ pnpm typecheck
 pnpm build
 ```
 
-Run the relevant boundary smoke after a change:
-
-```bash
-pnpm smoke:api
-pnpm smoke:web
-pnpm smoke:desktop
-pnpm smoke:runtime
-pnpm smoke:extensions
-pnpm smoke:workflows
-pnpm smoke:speech
-```
+Use `pnpm typecheck` and `pnpm build` before releasing a change.

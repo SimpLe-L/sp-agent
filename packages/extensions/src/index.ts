@@ -1,6 +1,33 @@
 import {
+  artifactWriteCsvSchema,
+  artifactWriteMarkdownSchema,
+  consolidateMemorySchema,
+  contextBriefingSchema,
+  createMemoryCandidateSchema,
+  extractMemoryFromSessionSchema,
+  localBookmarkDigestSchema,
+  localBookmarkSearchSchema,
+  mergeMemorySchema,
+  projectDocSearchSchema,
+  projectPlanSchema,
+  promoteMemorySchema,
+  searchMemorySchema,
+  skillScriptExecuteSchema,
+  summarizeMemorySessionSchema,
   type ExtensionCapability,
-  type ExtensionManifest
+  type ExtensionManifest,
+  updateMemorySchema,
+  voiceSynthesizeSchema,
+  voiceTranscribeSchema,
+  workspaceApplyPatchSchema,
+  workspaceGitSchema,
+  workspaceListSchema,
+  workspaceReadFileSchema,
+  workspaceRunScriptSchema,
+  workspaceSearchSchema,
+  workspaceWriteFileSchema,
+  webReadUrlSchema,
+  webSearchSchema
 } from "@sp-agent/shared";
 
 export type ExtensionRuntimeStatus = {
@@ -62,6 +89,9 @@ const memorySkill: ExtensionManifest = {
       label: "Write memory candidate",
       description: "Create an auditable Memory v2 candidate with kind, source, provenance, sensitivity, and optional occurredAt metadata.",
       permissions: ["memory:write_candidate"],
+      effects: ["local_write"],
+      riskLevel: "medium",
+      executionPolicy: "auto",
       inputSchema: "createMemoryCandidateSchema",
       outputSchema: "{ accepted: boolean, memoryId: string, memory: memoryEntry }"
     },
@@ -70,6 +100,9 @@ const memorySkill: ExtensionManifest = {
       label: "Promote memory fact",
       description: "Promote a memory candidate into an accepted durable fact.",
       permissions: ["memory:write"],
+      effects: ["local_write"],
+      riskLevel: "medium",
+      executionPolicy: "auto",
       inputSchema: "{ id: string, reason: string }",
       outputSchema: "{ memory: memoryEntry, auditEvents: memoryAuditEvent[] }"
     },
@@ -78,6 +111,9 @@ const memorySkill: ExtensionManifest = {
       label: "Update memory",
       description: "Update an existing memory entry while preserving audit history.",
       permissions: ["memory:write"],
+      effects: ["local_write"],
+      riskLevel: "medium",
+      executionPolicy: "auto",
       inputSchema: "{ id: string, content?: string, tags?: string[], confidence?: number, provenance?: object }",
       outputSchema: "{ memory: memoryEntry, auditEvents: memoryAuditEvent[] }"
     },
@@ -86,6 +122,9 @@ const memorySkill: ExtensionManifest = {
       label: "Merge memories",
       description: "Create a promoted memory from related source memories and tombstone the superseded entries.",
       permissions: ["memory:write"],
+      effects: ["local_write"],
+      riskLevel: "medium",
+      executionPolicy: "auto",
       inputSchema: "mergeMemorySchema",
       outputSchema: "{ memory: memoryEntry, mergedFrom: string[], auditEvents: memoryAuditEvent[] }"
     },
@@ -96,6 +135,39 @@ const memorySkill: ExtensionManifest = {
       permissions: ["memory:read"],
       inputSchema: "consolidateMemorySchema",
       outputSchema: "{ suggestions: memoryConsolidationSuggestion[], degradedReason?: string }"
+    },
+    {
+      id: "memory.forget",
+      label: "Forget memory",
+      description: "Tombstone a durable memory entry while preserving its audit history.",
+      permissions: ["memory:write"],
+      effects: ["local_write"],
+      riskLevel: "medium",
+      executionPolicy: "auto",
+      inputSchema: "{ id: string }",
+      outputSchema: "{ memory: memoryEntry }"
+    },
+    {
+      id: "memory.extract_session",
+      label: "Extract session memory",
+      description: "Extract auditable memory candidates from a chat session.",
+      permissions: ["memory:write_candidate"],
+      effects: ["local_write"],
+      riskLevel: "medium",
+      executionPolicy: "auto",
+      inputSchema: "extractMemoryFromSessionSchema",
+      outputSchema: "{ accepted: number }"
+    },
+    {
+      id: "memory.summarize_session",
+      label: "Summarize session memory",
+      description: "Create an auditable session summary memory candidate.",
+      permissions: ["memory:write_candidate"],
+      effects: ["local_write"],
+      riskLevel: "medium",
+      executionPolicy: "auto",
+      inputSchema: "summarizeMemorySessionSchema",
+      outputSchema: "{ accepted: boolean }"
     }
   ]
 };
@@ -153,6 +225,66 @@ const localProjectSkill: ExtensionManifest = {
       inputSchema: "projectPlanSchema",
       outputSchema: "{ plan: object, workflow: workflowRun }"
     }
+  ]
+};
+
+const workspaceSkill: ExtensionManifest = {
+  id: "local.workspace",
+  name: "Trusted Local Workspace",
+  description: "Typed workspace operations owned by the API. Paths stay within the configured root and commands are limited to declared package scripts.",
+  kind: "core",
+  phase: "phase-1",
+  status: "active",
+  entrypoint: "/api/extensions/local.workspace/invoke",
+  capabilities: [
+    { id: "workspace.list", label: "List workspace files", description: "List non-symlink files under the configured workspace root.", permissions: ["workspace:read"], effects: ["read"], riskLevel: "low", executionPolicy: "auto", inputSchema: "workspaceListSchema", outputSchema: "{ entries: workspaceEntry[] }" },
+    { id: "workspace.read_file", label: "Read workspace file", description: "Read a bounded regular file inside the configured workspace root.", permissions: ["workspace:read"], effects: ["read"], riskLevel: "low", executionPolicy: "auto", inputSchema: "workspaceReadFileSchema", outputSchema: "{ path: string, content: string }" },
+    { id: "workspace.search", label: "Search workspace text", description: "Search text in bounded regular files inside the configured workspace root.", permissions: ["workspace:read"], effects: ["read"], riskLevel: "low", executionPolicy: "auto", inputSchema: "workspaceSearchSchema", outputSchema: "{ results: workspaceSearchResult[] }" },
+    { id: "workspace.write_file", label: "Write workspace file", description: "Create or update a regular workspace file after path and symlink checks.", permissions: ["workspace:write"], effects: ["local_write"], riskLevel: "medium", executionPolicy: "auto", inputSchema: "workspaceWriteFileSchema", outputSchema: "{ path: string, bytesWritten: number }" },
+    { id: "workspace.apply_patch", label: "Apply workspace patch", description: "Apply a Git patch from a validated workspace directory.", permissions: ["workspace:write"], effects: ["local_write"], riskLevel: "medium", executionPolicy: "auto", inputSchema: "workspaceApplyPatchSchema", outputSchema: "{ cwd: string, output: string }" },
+    { id: "workspace.run_script", label: "Run allowed project script", description: "Run only test, build, typecheck, lint, or smoke scripts declared by package.json.", permissions: ["workspace:execute"], effects: ["local_write"], riskLevel: "medium", executionPolicy: "auto", inputSchema: "workspaceRunScriptSchema", outputSchema: "{ exitCode: number, stdout: string, stderr: string }" },
+    { id: "workspace.git_status", label: "Inspect Git status", description: "Read Git status and bounded diff for the configured workspace.", permissions: ["workspace:read"], effects: ["read"], riskLevel: "low", executionPolicy: "auto", inputSchema: "workspaceGitSchema", outputSchema: "{ status: string, diff?: string }" }
+  ]
+};
+
+const localArtifactsExtension: ExtensionManifest = {
+  id: "local.artifacts",
+  name: "Local Document Artifacts",
+  description: "Generate inspectable Markdown and CSV deliverables inside the configured workspace. Rich DOCX, PDF, and XLSX output stays a complete Skill-package concern.",
+  kind: "core",
+  phase: "phase-1",
+  status: "active",
+  entrypoint: "/api/extensions/local.artifacts/invoke",
+  capabilities: [
+    { id: "artifact.write_markdown", label: "Write Markdown document", description: "Create a Markdown document inside the configured workspace and return its delivery metadata.", permissions: ["artifacts:write", "workspace:write"], effects: ["local_write"], riskLevel: "medium", executionPolicy: "auto", inputSchema: "artifactWriteMarkdownSchema", outputSchema: "{ path, bytesWritten, kind: 'markdown', mimeType }" },
+    { id: "artifact.write_csv", label: "Write CSV document", description: "Create a structured CSV document inside the configured workspace and return its delivery metadata.", permissions: ["artifacts:write", "workspace:write"], effects: ["local_write"], riskLevel: "medium", executionPolicy: "auto", inputSchema: "artifactWriteCsvSchema", outputSchema: "{ path, bytesWritten, kind: 'csv', mimeType, rowCount }" }
+  ]
+};
+
+const remoteWebConnector: ExtensionManifest = {
+  id: "remote.web",
+  name: "Public Web Reader",
+  description: "Search and read public web content through bounded, auditable retrieval. Private networks, URL credentials, unsupported media, and oversized responses are rejected or explicitly degraded.",
+  kind: "connector",
+  phase: "phase-1",
+  status: "active",
+  entrypoint: "/api/extensions/remote.web/invoke",
+  capabilities: [
+    { id: "web.search", label: "Search public web", description: "Search the configured public web backend and return bounded title, URL, and snippet results with retrieval metadata.", permissions: ["web:search", "network:public"], effects: ["provider_call"], riskLevel: "low", executionPolicy: "auto", inputSchema: "webSearchSchema", outputSchema: "{ query, provider, retrievedAt, results, degradedReason? }" },
+    { id: "web.read_url", label: "Read public web page", description: "Read a public http(s) page, normalize HTML to Markdown, and return source identity, retrieval time, hash, and truncation state.", permissions: ["web:read", "network:public"], effects: ["provider_call"], riskLevel: "low", executionPolicy: "auto", inputSchema: "webReadUrlSchema", outputSchema: "{ source, content, degradedReason? }" }
+  ]
+};
+
+const skillSandboxExtension: ExtensionManifest = {
+  id: "local.skill-sandbox",
+  name: "Skill Script Sandbox",
+  description: "Runs an explicitly requested active Skill JavaScript file in an OS sandbox with network denial, package-root reads, bounded output, and a timeout.",
+  kind: "core",
+  phase: "phase-1",
+  status: "active",
+  entrypoint: "/api/extensions/local.skill-sandbox/invoke",
+  capabilities: [
+    { id: "skill.run_sandboxed_script", label: "Run sandboxed Skill script", description: "Execute an active Skill JavaScript file only through the OS sandbox.", permissions: ["skills:script"], effects: ["local_write"], riskLevel: "high", executionPolicy: "auto", inputSchema: "skillScriptExecuteSchema", outputSchema: "{ status, stdout, stderr, exitCode, degradedReason? }" }
   ]
 };
 
@@ -225,10 +357,10 @@ const personalBriefingSkill: ExtensionManifest = {
 const speechSkill: ExtensionManifest = {
   id: "local.speech",
   name: "Speech I/O",
-  description: "Planned STT/TTS provider boundary for voice chat.",
+  description: "STT/TTS provider boundary for voice chat. Readiness is reported from configured local speech providers.",
   kind: "skill",
   phase: "phase-4",
-  status: "planned",
+  status: "degraded",
   entrypoint: "/api/voice",
   capabilities: [
     {
@@ -236,7 +368,10 @@ const speechSkill: ExtensionManifest = {
       label: "Transcribe audio",
       description: "Convert recorded audio to text through a configured STT provider.",
       permissions: ["audio:transcribe"],
-      inputSchema: "audio/*",
+      effects: ["provider_call"],
+      riskLevel: "low",
+      executionPolicy: "auto",
+      inputSchema: "voiceTranscribeSchema",
       outputSchema: "{ transcript: string, degradedReason?: string }"
     },
     {
@@ -244,16 +379,57 @@ const speechSkill: ExtensionManifest = {
       label: "Synthesize speech",
       description: "Convert assistant text to playable audio through a configured TTS provider.",
       permissions: ["audio:synthesize"],
-      inputSchema: "{ text: string }",
-      outputSchema: "audio/*"
+      effects: ["provider_call"],
+      riskLevel: "low",
+      executionPolicy: "auto",
+      inputSchema: "voiceSynthesizeSchema",
+      outputSchema: "voiceSynthesizeResponseSchema"
     }
   ],
-  degradedReason: "Speech provider adapters are planned but not implemented yet."
+  degradedReason: "No configured speech provider is ready."
 };
 
-const manifests: ExtensionManifest[] = [coreAgentShell, memorySkill, localContextSkill, localProjectSkill, personalResearchSkill, localBookmarksConnector, speechSkill];
+const manifests: ExtensionManifest[] = [coreAgentShell, memorySkill, localContextSkill, localProjectSkill, workspaceSkill, localArtifactsExtension, remoteWebConnector, skillSandboxExtension, personalResearchSkill, localBookmarksConnector, speechSkill];
 
-const executableCapabilityContracts = {
+type InputContract = { input: { parse(value: unknown): unknown } };
+const recordInput: InputContract = { input: { parse: requireRecord } };
+const memoryIdInput: InputContract = { input: { parse(value: unknown) { const input = requireRecord(value); return { ...input, id: requireId(input) }; } } };
+const promoteMemoryInput: InputContract = { input: { parse(value: unknown) { const input = requireRecord(value); return { ...promoteMemorySchema.parse(input), id: requireId(input) }; } } };
+const updateMemoryInput: InputContract = { input: { parse(value: unknown) { const input = requireRecord(value); return { ...updateMemorySchema.parse(input), id: requireId(input) }; } } };
+
+// This is the executable counterpart of the manifest's schema label. A
+// capability cannot become invokable without a parser at this boundary.
+const executableCapabilityContracts: Record<string, InputContract> = {
+  "core.agent-shell.extensions.inspect": recordInput,
+  "local.memory.memory.search": { input: searchMemorySchema },
+  "local.memory.memory.write_candidate": { input: createMemoryCandidateSchema },
+  "local.memory.memory.promote_fact": promoteMemoryInput,
+  "local.memory.memory.update": updateMemoryInput,
+  "local.memory.memory.merge": { input: mergeMemorySchema },
+  "local.memory.memory.consolidate": { input: consolidateMemorySchema },
+  "local.memory.memory.forget": memoryIdInput,
+  "local.memory.memory.extract_session": { input: extractMemoryFromSessionSchema },
+  "local.memory.memory.summarize_session": { input: summarizeMemorySessionSchema },
+  "local.context.context.snapshot": recordInput,
+  "local.context.context.briefing": { input: contextBriefingSchema },
+  "local.project.project.search_docs": { input: projectDocSearchSchema },
+  "local.project.project.plan": { input: projectPlanSchema },
+  "local.workspace.workspace.list": { input: workspaceListSchema },
+  "local.workspace.workspace.read_file": { input: workspaceReadFileSchema },
+  "local.workspace.workspace.search": { input: workspaceSearchSchema },
+  "local.workspace.workspace.write_file": { input: workspaceWriteFileSchema },
+  "local.workspace.workspace.apply_patch": { input: workspaceApplyPatchSchema },
+  "local.workspace.workspace.run_script": { input: workspaceRunScriptSchema },
+  "local.workspace.workspace.git_status": { input: workspaceGitSchema },
+  "local.artifacts.artifact.write_markdown": { input: artifactWriteMarkdownSchema },
+  "local.artifacts.artifact.write_csv": { input: artifactWriteCsvSchema },
+  "remote.web.web.search": { input: webSearchSchema },
+  "remote.web.web.read_url": { input: webReadUrlSchema },
+  "local.skill-sandbox.skill.run_sandboxed_script": { input: skillScriptExecuteSchema },
+  "local.speech.speech.transcribe": { input: voiceTranscribeSchema },
+  "local.speech.speech.synthesize": { input: voiceSynthesizeSchema },
+  "local.bookmarks.bookmarks.search": { input: localBookmarkSearchSchema },
+  "local.bookmarks.bookmarks.digest": { input: localBookmarkDigestSchema }
 };
 
 export function getExtensionRuntimeStatus(): ExtensionRuntimeStatus {
@@ -282,6 +458,16 @@ export function findCapability(capabilities: ExtensionCapability[], capabilityId
 
 export function parseExtensionCapabilityInput(extensionId: string, capabilityId: string, input: Record<string, unknown>) {
   const key = `${extensionId}.${capabilityId}`;
-  const contract = (executableCapabilityContracts as Record<string, { input: { parse(value: unknown): unknown } }>)[key];
+  const contract = executableCapabilityContracts[key];
   return contract ? contract.input.parse(input) : input;
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Capability input must be an object.");
+  return value as Record<string, unknown>;
+}
+
+function requireId(value: Record<string, unknown>) {
+  if (typeof value.id !== "string" || !value.id.trim()) throw new Error("Capability input requires id.");
+  return value.id;
 }

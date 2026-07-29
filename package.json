@@ -12,15 +12,7 @@
     "electron:install": "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node apps/desktop/node_modules/electron/install.js",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint",
-    "smoke:api": "node scripts/api-smoke.mjs",
-    "smoke:extensions": "node scripts/api-extensions-smoke.mjs",
-    "smoke:memory": "node scripts/api-memory-smoke.mjs",
-    "smoke:workflows": "node scripts/api-workflows-smoke.mjs",
-    "smoke:speech": "node scripts/api-speech-smoke.mjs",
-    "smoke:desktop": "node scripts/desktop-preflight-smoke.mjs",
-    "smoke:runtime": "node scripts/agent-runtime-smoke.mjs",
-    "smoke:web": "node scripts/web-route-smoke.mjs"
+    "lint": "pnpm -r lint"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

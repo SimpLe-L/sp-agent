@@ -1,17 +1,21 @@
-import React, { useState } from "react";
+import React, { lazy, Suspense, useEffect, useState } from "react";
 import { AssistantRuntimeProvider, ThreadListItemPrimitive, ThreadListPrimitive, useAuiState } from "@assistant-ui/react";
-import { Archive, Bot, Menu, MoreHorizontal, PanelLeft, Plus, Share, Trash2 } from "lucide-react";
+import { Archive, Bot, CircleAlert, Menu, MoreHorizontal, PanelLeft, Plus, Server, Share, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ApprovalReview } from "@/components/app/panels/ApprovalReview";
-import { MemoryReview } from "@/components/app/panels/MemoryReview";
-import { SkillCatalog } from "@/components/app/panels/SkillCatalog";
-import { WorkflowReview } from "@/components/app/panels/WorkflowReview";
 import { AssistantThread } from "@/components/app/AssistantThread";
 import { useAgentAssistantRuntime, normalizeThreadTitle } from "./assistant-runtime";
 import { cn } from "@/lib/utils";
+import { apiBase, fetchJson } from "./api";
+import type { AgentStatus } from "./types";
+
+const SkillCatalog = lazy(() => import("@/components/app/panels/SkillCatalog").then((module) => ({ default: module.SkillCatalog })));
+const WorkflowReview = lazy(() => import("@/components/app/panels/WorkflowReview").then((module) => ({ default: module.WorkflowReview })));
+const MemoryReview = lazy(() => import("@/components/app/panels/MemoryReview").then((module) => ({ default: module.MemoryReview })));
+const ApprovalReview = lazy(() => import("@/components/app/panels/ApprovalReview").then((module) => ({ default: module.ApprovalReview })));
+const McpServers = lazy(() => import("@/components/app/panels/McpServers").then((module) => ({ default: module.McpServers })));
 
 export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -187,14 +191,43 @@ function ChatHeader({
         <ThreadTitle />
       </div>
       <div className="flex min-w-0 items-center gap-2">
-        <SkillCatalog />
-        <WorkflowReview />
-        <MemoryReview />
-        <ApprovalReview />
+        <AgentStatusButton />
+        <Suspense fallback={null}>
+          <SkillCatalog />
+          <WorkflowReview />
+          <MemoryReview />
+          <ApprovalReview />
+          <McpServers />
+        </Suspense>
         <TooltipIconButton tooltip="Share" className="text-muted-foreground" disabled>
           <Share className="size-4.5" />
         </TooltipIconButton>
       </div>
     </header>
+  );
+}
+
+function AgentStatusButton() {
+  const [status, setStatus] = useState<AgentStatus | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void fetchJson<AgentStatus>(`${apiBase}/agent/status`)
+      .then((value) => { if (active) setStatus(value); })
+      .catch(() => { if (active) setUnavailable(true); });
+    return () => { active = false; };
+  }, []);
+  const extensionCount = status?.extensions?.length ?? 0;
+  const ready = Boolean(status?.piRuntime?.reachable) && !unavailable;
+  const label = unavailable ? "Agent API unavailable" : status ? ready ? "Runtime ready" : status.piRuntime?.degradedReason ?? "Runtime degraded" : "Checking runtime";
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button variant="ghost" size="icon" className="relative text-muted-foreground" data-testid="provider-status-button" aria-label={label} />}>
+        {ready ? <Server className="size-4.5" /> : <CircleAlert className="size-4.5" />}
+        <span className={cn("absolute top-1 right-1 size-1.5 rounded-full", ready ? "bg-emerald-500" : "bg-amber-500")} />
+        <span className="sr-only" data-testid="extension-count">{extensionCount} extensions</span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }

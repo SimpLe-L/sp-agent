@@ -5,6 +5,7 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import { localSkillManifestSchema, type ImportRepositorySkillInput, type LocalSkillRecord } from "@sp-agent/shared";
 import { listExtensionManifests } from "@sp-agent/extensions";
 import { LocalJsonStore } from "./local-json-store.service.js";
+import { McpService } from "./mcp.service.js";
 
 type SkillFile = { skills: LocalSkillRecord[]; audit: Array<{ action: string; skillId: string; version: string; at: string; sourcePath?: string }> };
 const FORBIDDEN_NAMES = new Set(["node_modules", ".git", ".DS_Store"]);
@@ -14,17 +15,18 @@ const MAX_REFERENCE_BYTES = 1_000_000;
 
 @Injectable()
 export class LocalSkillsService {
-  constructor(private readonly store: LocalJsonStore) {}
+  constructor(private readonly store: LocalJsonStore, private readonly mcpService: McpService) {}
 
   async list() { return (await this.read()).skills; }
 
-  async get(id: string) {
-    const skill = (await this.read()).skills.find((item) => item.id === id);
+  async get(id: string, version?: string) {
+    const candidates = (await this.read()).skills.filter((item) => item.id === id);
+    const skill = version ? candidates.find((item) => item.version === version) : candidates.sort((left, right) => Number(right.status === "active") - Number(left.status === "active") || right.installedAt.localeCompare(left.installedAt))[0];
     if (!skill) throw new NotFoundException(`Local Skill ${id} not found`);
     return skill;
   }
 
-  async import(sourcePath: string, sourceOrigin = sourcePath) {
+  async import(sourcePath: string, sourceOrigin = sourcePath, sourceCommit?: string) {
     const source = resolve(sourcePath);
     const manifestPath = join(source, "skill.json");
     const skillPath = join(source, "SKILL.md");
@@ -36,19 +38,23 @@ export class LocalSkillsService {
     try {
       manifest = rawManifest ? localSkillManifestSchema.parse(JSON.parse(rawManifest)) : manifestFromSkillFrontMatter(instructions);
     } catch { throw new BadRequestException(rawManifest ? "skill.json is invalid." : "SKILL.md front matter must include name and description."); }
-    const registeredTools = new Set(listExtensionManifests().flatMap((extension) => extension.capabilities.map((capability) => `${extension.id}.${capability.id}`)));
+    const registeredTools = new Set(
+      [...listExtensionManifests(), ...(await this.mcpService.manifests())].flatMap((extension) =>
+        extension.capabilities.map((capability) => `${extension.id}.${capability.id}`)
+      )
+    );
     for (const tool of manifest.requestedTools) {
       if (!registeredTools.has(tool)) throw new BadRequestException(`Skill requests an unknown API tool: ${tool}`);
     }
-    const contentHash = createHash("sha256").update(rawManifest ?? "").update("\n").update(instructions).digest("hex");
+    const validation = await this.packageValidation(source);
+    const contentHash = await this.hashPackage(source);
     const destination = this.store.pathFor(join("skills", manifest.id, manifest.version));
-    await rm(destination, { recursive: true, force: true });
+    if (await lstat(destination).then(() => true).catch(() => false)) throw new BadRequestException(`Skill ${manifest.id}@${manifest.version} is already installed.`);
     await mkdir(destination, { recursive: true });
     await cp(source, destination, { recursive: true, dereference: false, filter: (path) => !FORBIDDEN_NAMES.has(basename(path)) });
     const file = await this.read();
-    file.skills = file.skills.filter((item) => item.id !== manifest.id);
     const now = new Date().toISOString();
-    const record: LocalSkillRecord = { ...manifest, status: "disabled", sourcePath: sourceOrigin, contentHash, installedAt: now };
+    const record: LocalSkillRecord = { ...manifest, status: "disabled", sourcePath: sourceOrigin, sourceCommit, contentHash, validation: { ...validation, validatedAt: now }, installedAt: now };
     file.skills.push(record);
     file.audit.push({ action: "imported", skillId: manifest.id, version: manifest.version, at: now, sourcePath: sourceOrigin });
     await this.write(file);
@@ -86,7 +92,7 @@ export class LocalSkillsService {
         await mkdir(resolve(destination, ".."), { recursive: true });
         await writeFile(destination, await this.readGitHubBlob(repository, file.sha), "utf8");
       }));
-      return await this.import(staging, sourceOrigin);
+      return await this.import(staging, sourceOrigin, commit);
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
@@ -94,9 +100,10 @@ export class LocalSkillsService {
 
   async setEnabled(id: string, enabled: boolean) {
     const file = await this.read();
-    const skill = file.skills.find((item) => item.id === id);
+    const skill = file.skills.filter((item) => item.id === id).sort((left, right) => right.installedAt.localeCompare(left.installedAt))[0];
     if (!skill) throw new NotFoundException(`Local Skill ${id} not found`);
     const now = new Date().toISOString();
+    if (enabled) for (const candidate of file.skills.filter((item) => item.id === id)) candidate.status = "disabled";
     skill.status = enabled ? "active" : "disabled";
     skill.enabledAt = enabled ? now : undefined;
     file.audit.push({ action: enabled ? "enabled" : "disabled", skillId: skill.id, version: skill.version, at: now });
@@ -106,9 +113,10 @@ export class LocalSkillsService {
 
   async remove(id: string) {
     const file = await this.read();
-    const skill = file.skills.find((item) => item.id === id);
+    const matches = file.skills.filter((item) => item.id === id);
+    const skill = matches.sort((left, right) => right.installedAt.localeCompare(left.installedAt))[0];
     if (!skill) throw new NotFoundException(`Local Skill ${id} not found`);
-    await rm(this.store.pathFor(join("skills", skill.id, skill.version)), { recursive: true, force: true });
+    await Promise.all(matches.map((item) => rm(this.store.pathFor(join("skills", item.id, item.version)), { recursive: true, force: true })));
     file.skills = file.skills.filter((item) => item.id !== id);
     file.audit.push({ action: "removed", skillId: skill.id, version: skill.version, at: new Date().toISOString() });
     await this.write(file);
@@ -116,6 +124,18 @@ export class LocalSkillsService {
   }
 
   async activeManifests() { return (await this.list()).filter((skill) => skill.status === "active"); }
+
+  async rollback(id: string, version: string) {
+    const file = await this.read();
+    const skill = file.skills.find((item) => item.id === id && item.version === version);
+    if (!skill) throw new NotFoundException(`Local Skill ${id}@${version} not found`);
+    for (const candidate of file.skills.filter((item) => item.id === id)) candidate.status = "disabled";
+    skill.status = "active";
+    skill.enabledAt = new Date().toISOString();
+    file.audit.push({ action: "rolled_back", skillId: id, version, at: skill.enabledAt });
+    await this.write(file);
+    return skill;
+  }
 
   async loadInstructions(id: string) {
     const skill = await this.get(id);
@@ -135,6 +155,17 @@ export class LocalSkillsService {
     return { skillId: skill.id, path: referencePath, content: await readFile(path, "utf8") };
   }
 
+  async resolveSandboxScript(id: string, version: string | undefined, scriptPath: string) {
+    const skill = await this.get(id, version);
+    if (skill.status !== "active") throw new BadRequestException(`Local Skill ${id} is disabled.`);
+    const root = this.store.pathFor(join("skills", skill.id, skill.version));
+    const path = resolve(root, safeRelativePath(scriptPath));
+    if (!path.startsWith(`${root}${sep}`)) throw new BadRequestException("Script path must stay within the installed Skill package.");
+    const stat = await lstat(path).catch(() => { throw new NotFoundException(`Skill script ${scriptPath} was not found`); });
+    if (!stat.isFile() || stat.isSymbolicLink() || !/\.(?:cjs|js|mjs)$/iu.test(path)) throw new BadRequestException("Only regular JavaScript Skill scripts may run in the sandbox.");
+    return { skill, root, path };
+  }
+
   private async validateTree(root: string) {
     let entries: Array<{ name: string; isDirectory(): boolean }>;
     try { entries = await readdir(root, { withFileTypes: true }); } catch { throw new BadRequestException("Skill source directory cannot be read."); }
@@ -145,6 +176,42 @@ export class LocalSkillsService {
       if (stat.isSymbolicLink()) throw new BadRequestException(`Symbolic links are not allowed: ${relative(root, path)}`);
       if (stat.isDirectory()) await this.validateTree(path);
     }
+  }
+
+  private async packageValidation(root: string) {
+    const files: Array<{ path: string; size: number }> = [];
+    const collect = async (directory: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        if (FORBIDDEN_NAMES.has(entry.name)) continue;
+        const path = join(directory, entry.name);
+        const stat = await lstat(path);
+        if (stat.isDirectory()) await collect(path);
+        else if (stat.isFile()) files.push({ path: relative(root, path), size: stat.size });
+      }
+    };
+    await collect(root);
+    const totalBytes = files.reduce((total, file) => total + file.size, 0);
+    if (files.length > MAX_PACKAGE_FILES || totalBytes > MAX_PACKAGE_BYTES) throw new BadRequestException(`Skill package exceeds the ${MAX_PACKAGE_FILES} file or ${MAX_PACKAGE_BYTES / 1_000_000} MB import limit.`);
+    return { fileCount: files.length, totalBytes };
+  }
+
+  private async hashPackage(root: string) {
+    const files: string[] = [];
+    const collect = async (directory: string): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        if (FORBIDDEN_NAMES.has(entry.name)) continue;
+        const path = join(directory, entry.name);
+        const stat = await lstat(path);
+        if (stat.isDirectory()) await collect(path);
+        else if (stat.isFile()) files.push(relative(root, path).replaceAll(sep, "/"));
+      }
+    };
+    await collect(root);
+    const hash = createHash("sha256");
+    for (const file of files.sort((left, right) => left.localeCompare(right))) {
+      hash.update(file).update("\0").update(await readFile(join(root, file))).update("\0");
+    }
+    return hash.digest("hex");
   }
 
   private async resolveGitHubCommit(repository: GitHubRepository, ref: string) {

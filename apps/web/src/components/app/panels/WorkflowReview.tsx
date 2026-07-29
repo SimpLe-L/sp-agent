@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Activity, RefreshCw, RotateCcw, XCircle } from "lucide-react";
+import { Activity, Play, RefreshCw, RotateCcw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -70,6 +70,17 @@ export function WorkflowReview() {
     }
   }
 
+  async function resumeWorkflow(workflow: WorkflowRun) {
+    setStatus("Resuming workflow");
+    try {
+      const data = await fetchJson<{ workflow: WorkflowRun }>(`${apiBase}/workflows/${workflow.id}/resume`, { method: "POST" });
+      upsertWorkflow(data.workflow);
+      setStatus("Workflow resumed");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Resume failed");
+    }
+  }
+
   function upsertWorkflow(workflow: WorkflowRun) {
     setWorkflows((current) => current.map((item) => item.id === workflow.id ? workflow : item));
   }
@@ -136,7 +147,7 @@ export function WorkflowReview() {
           </div>
           <div className="min-h-0 overflow-auto p-4" data-testid="workflow-detail">
             {selectedWorkflow ? (
-              <WorkflowDetail workflow={selectedWorkflow} onCancel={() => void cancelWorkflow(selectedWorkflow)} onRetry={() => void retryWorkflow(selectedWorkflow)} />
+              <WorkflowDetail workflow={selectedWorkflow} onCancel={() => void cancelWorkflow(selectedWorkflow)} onRetry={() => void retryWorkflow(selectedWorkflow)} onResume={() => void resumeWorkflow(selectedWorkflow)} />
             ) : (
               <div className="flex min-h-40 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">No workflow selected</div>
             )}
@@ -147,9 +158,10 @@ export function WorkflowReview() {
   );
 }
 
-function WorkflowDetail({ workflow, onCancel, onRetry }: { workflow: WorkflowRun; onCancel: () => void; onRetry: () => void }) {
+function WorkflowDetail({ workflow, onCancel, onRetry, onResume }: { workflow: WorkflowRun; onCancel: () => void; onRetry: () => void; onResume: () => void }) {
   const canCancel = workflow.status === "pending" || workflow.status === "running";
   const canRetry = workflow.status === "completed" || workflow.status === "failed" || workflow.status === "cancelled";
+  const canResume = workflow.status === "paused";
   return (
     <article className="grid gap-4">
       <header className={cn("grid gap-2 rounded-lg border border-l-3 p-3", workflowStatusBorderClass(workflow.status))}>
@@ -172,6 +184,10 @@ function WorkflowDetail({ workflow, onCancel, onRetry }: { workflow: WorkflowRun
           <Button variant="outline" size="sm" onClick={onRetry} disabled={!canRetry}>
             <RotateCcw size={14} />
             Retry
+          </Button>
+          <Button variant="outline" size="sm" onClick={onResume} disabled={!canResume}>
+            <Play size={14} />
+            Resume
           </Button>
           <Button variant="outline" size="sm" onClick={onCancel} disabled={!canCancel}>
             <XCircle size={14} />
@@ -237,6 +253,7 @@ function workflowStatusBorderClass(status: WorkflowRun["status"] | WorkflowNodeE
   if (status === "completed") return "border-l-emerald-500";
   if (status === "running") return "border-l-blue-500";
   if (status === "pending") return "border-l-amber-500";
+  if (status === "paused") return "border-l-violet-500";
   if (status === "failed") return "border-l-red-500";
   return "border-l-slate-500";
 }
@@ -245,6 +262,7 @@ function workflowStatusTextClass(status: WorkflowRun["status"] | WorkflowNodeEve
   if (status === "completed") return "text-emerald-700";
   if (status === "running") return "text-blue-700";
   if (status === "pending") return "text-amber-700";
+  if (status === "paused") return "text-violet-700";
   if (status === "failed") return "text-red-700";
   return "text-muted-foreground";
 }

@@ -221,12 +221,15 @@ export class MemoryService {
     const statuses = input.statuses ?? ["candidate", "active"];
     const strategy = resolveSearchStrategy(input, relativeWindow !== undefined);
     const vectorHits = await this.vectorHits(input, strategy, fromMs, toMs);
-    const candidates = (await this.readFile()).memories
+    const file = await this.readFile();
+    await this.store.syncMemoryFts(file.memories);
+    const ftsHits = new Set(await this.store.searchMemoryFts(input.query, Math.max(input.limit * 6, 50)));
+    const candidates = file.memories
       .filter((entry) => statuses.includes(entry.status))
       .filter((entry) => input.includeSensitive || entry.sensitivity !== "sensitive")
       .filter((entry) => !input.scope || entry.scope === input.scope)
       .filter((entry) => !input.sessionId || entry.scope === "global" || entry.sessionId === input.sessionId);
-    const memories = rankByStrategy(candidates, input, terms, strategy, fromMs, toMs, vectorHits).slice(0, input.limit);
+    const memories = rankByStrategy(candidates, input, terms, strategy, fromMs, toMs, vectorHits, ftsHits).slice(0, input.limit);
     return { memories };
   }
 
@@ -282,6 +285,7 @@ export class MemoryService {
 
   private async writeFile(file: MemoryFile) {
     await this.store.write("memory.json", file);
+    await this.store.syncMemoryFts(file.memories);
   }
 }
 
@@ -326,7 +330,8 @@ function rankByStrategy(
   strategy: "core_semantic" | "journal_temporal" | "hybrid",
   fromMs: number | undefined,
   toMs: number | undefined,
-  vectorHits: Map<string, MemoryVectorHit>
+  vectorHits: Map<string, MemoryVectorHit>,
+  ftsHits: Set<string>
 ) {
   if (strategy === "core_semantic") {
     return rankEntries(
@@ -335,7 +340,8 @@ function rankByStrategy(
       input.query,
       false,
       vectorHits,
-      "core_semantic"
+      "core_semantic",
+      ftsHits
     );
   }
 
@@ -348,7 +354,8 @@ function rankByStrategy(
       input.query,
       true,
       vectorHits,
-      "journal_temporal"
+      "journal_temporal",
+      ftsHits
     );
   }
 
@@ -358,7 +365,8 @@ function rankByStrategy(
     input.query,
     false,
     vectorHits,
-    "hybrid"
+    "hybrid",
+    ftsHits
   );
   const journal = rankEntries(
     entries.filter((entry) => matchesKind(entry, input.kind, ["journal", "summary"])),
@@ -366,7 +374,8 @@ function rankByStrategy(
     input.query,
     false,
     vectorHits,
-    "hybrid"
+    "hybrid",
+    ftsHits
   );
   return mergeRankedByQuota(core, journal, input.limit);
 }
@@ -377,10 +386,11 @@ function rankEntries(
   query: string,
   temporalSearch: boolean,
   vectorHits: Map<string, MemoryVectorHit>,
-  strategy: "core_semantic" | "journal_temporal" | "hybrid"
+  strategy: "core_semantic" | "journal_temporal" | "hybrid",
+  ftsHits: Set<string>
 ) {
   return entries
-    .map((entry) => scoreMemory(entry, terms, query, temporalSearch, vectorHits.get(entry.id), strategy))
+    .map((entry) => scoreMemory(entry, terms, query, temporalSearch, vectorHits.get(entry.id), strategy, ftsHits.has(entry.id)))
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt));
 }
@@ -415,7 +425,8 @@ function scoreMemory(
   query: string,
   temporalSearch = false,
   vectorHit: MemoryVectorHit | undefined,
-  strategy: "core_semantic" | "journal_temporal" | "hybrid"
+  strategy: "core_semantic" | "journal_temporal" | "hybrid",
+  ftsHit: boolean
 ): ScoredMemory {
   const haystack = `${entry.content} ${entry.tags.join(" ")} ${entry.source.label ?? ""}`.toLowerCase();
   const content = entry.content.toLowerCase();
@@ -436,6 +447,11 @@ function scoreMemory(
   if (strongVectorHit) {
     score += strongVectorHit.score * 6;
     rankingSignals.push("vector_match");
+  }
+
+  if (ftsHit) {
+    score += 4;
+    rankingSignals.push("sqlite_fts");
   }
 
   if (normalizedQuery && content.includes(normalizedQuery)) {

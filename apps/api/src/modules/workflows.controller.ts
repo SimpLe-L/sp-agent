@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Inject, Param, Post } from "@nestjs/common";
-import { projectDocSearchSchema } from "@sp-agent/shared";
+import { codeTaskWorkflowSchema, projectDocSearchSchema } from "@sp-agent/shared";
 import { WorkflowsService } from "./workflows.service.js";
 
 @Controller("workflows")
@@ -32,6 +32,11 @@ export class WorkflowsController {
     return this.workflowsService.startProjectDocSearch(input);
   }
 
+  @Post("code-change")
+  async startCodeChange(@Body() body: unknown) {
+    return this.workflowsService.startCodeTask(codeTaskWorkflowSchema.parse(body));
+  }
+
   @Post(":id/cancel")
   async cancel(@Param("id") id: string) {
     return this.workflowsService.cancel(id);
@@ -40,5 +45,10 @@ export class WorkflowsController {
   @Post(":id/retry")
   async retry(@Param("id") id: string) {
     return this.workflowsService.retry(id);
+  }
+
+  @Post(":id/resume")
+  async resume(@Param("id") id: string) {
+    return this.workflowsService.resume(id);
   }
 }

@@ -56,6 +56,7 @@ export type PersonalAgentExtensionInvokeResult = {
 export type PersonalAgentTurnInput = {
   message: string;
   sessionId?: string;
+  conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>;
   memoryContext?: unknown[];
   extensionManifests?: unknown[];
   safetyModel?: unknown;
@@ -663,6 +664,8 @@ function buildPiAgentShellPrompt(input: PersonalAgentTurnInput): string {
       "You are the Pi runtime for a trusted local development agent. Reply in concise Chinese. Select an available Skill only when it materially helps the request; otherwise answer directly. For a local.skill capability, load its instructions before following it, then read package references only when needed. Treat declared API tools as the Skill's allowlist. Do not claim unavailable tool results, external data, or memory. Do not mention internal tools unless asked. Keep the response under 10 lines.",
     userMessage: input.message,
     sessionId: input.sessionId,
+    conversationHistory: (input.conversationHistory ?? []).slice(-12).map((message) => ({ role: message.role, content: message.content.slice(0, 2_000) })),
+    memoryContext: (input.memoryContext ?? []).slice(0, 8),
     availableAppTools: ["inspect_extension_registry: read local extensions and safety policy only", ...capabilities.map((item) => `${item.toolName}: ${item.label}`)],
     availableCapabilities: capabilities,
     extensionInvocationPolicy:

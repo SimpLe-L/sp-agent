@@ -286,7 +286,7 @@ export const workflowNodeEventSchema = z.object({
   id: z.string(),
   nodeId: z.string(),
   label: z.string(),
-  status: z.enum(["pending", "running", "completed", "failed", "cancelled"]),
+  status: z.enum(["pending", "running", "paused", "completed", "failed", "cancelled"]),
   payload: z.record(z.unknown()).default({}),
   error: z.string().optional(),
   degradedReason: z.string().optional(),
@@ -299,7 +299,7 @@ export type WorkflowNodeEvent = z.infer<typeof workflowNodeEventSchema>;
 export const workflowRunSchema = z.object({
   id: z.string(),
   kind: z.string(),
-  status: z.enum(["pending", "running", "completed", "failed", "cancelled"]),
+  status: z.enum(["pending", "running", "paused", "completed", "failed", "cancelled"]),
   input: z.record(z.unknown()).default({}),
   result: z.unknown().optional(),
   degradedReason: z.string().optional(),
@@ -308,6 +308,10 @@ export const workflowRunSchema = z.object({
   updatedAt: z.string(),
   startedAt: z.string().optional(),
   completedAt: z.string().optional(),
+  checkpoint: z.object({ nodeId: z.string(), data: z.record(z.unknown()).default({}), updatedAt: z.string() }).optional(),
+  attempt: z.number().int().nonnegative().default(0),
+  maxRetries: z.number().int().nonnegative().default(0),
+  correlationId: z.string().optional(),
   nodeEvents: z.array(workflowNodeEventSchema).default([])
 });
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
@@ -628,10 +632,14 @@ export const extensionCapabilitySchema = z.object({
   label: z.string(),
   description: z.string(),
   permissions: z.array(z.string()).default([]),
+  effects: z.array(z.enum(["read", "local_write", "provider_call", "external_write", "credential", "destructive"])).default(["read"]),
+  riskLevel: z.enum(["low", "medium", "high", "critical"]).default("low"),
+  executionPolicy: z.enum(["auto", "single_approval", "session_approval", "always_deny"]).default("auto"),
   inputSchema: z.string().optional(),
   outputSchema: z.string().optional()
 });
-export type ExtensionCapability = z.infer<typeof extensionCapabilitySchema>;
+// Registry declarations may omit defaulted policy fields; parsed API payloads receive defaults.
+export type ExtensionCapability = z.input<typeof extensionCapabilitySchema>;
 
 export const extensionManifestSchema = z.object({
   id: z.string(),
@@ -644,17 +652,38 @@ export const extensionManifestSchema = z.object({
   capabilities: z.array(extensionCapabilitySchema),
   degradedReason: z.string().optional()
 });
-export type ExtensionManifest = z.infer<typeof extensionManifestSchema>;
+export type ExtensionManifest = z.input<typeof extensionManifestSchema>;
 
 export const extensionInvocationAuditSchema = z.object({
   extensionId: z.string(),
   capabilityId: z.string(),
   permissions: z.array(z.string()).default([]),
   allowed: z.boolean(),
-  mode: z.enum(["read_only", "write_or_provider"]),
+  effects: z.array(z.enum(["read", "local_write", "provider_call", "external_write", "credential", "destructive"])).default(["read"]),
+  riskLevel: z.enum(["low", "medium", "high", "critical"]).default("low"),
+  executionPolicy: z.enum(["auto", "single_approval", "session_approval", "always_deny"]).default("auto"),
+  mode: z.enum(["read_only", "trusted_local", "approval_required", "denied"]),
   reason: z.string()
 });
 export type ExtensionInvocationAudit = z.infer<typeof extensionInvocationAuditSchema>;
+
+export const capabilityAuditEventSchema = z.object({
+  id: z.string(),
+  extensionId: z.string(),
+  capabilityId: z.string(),
+  sessionId: z.string().optional(),
+  runtimeId: z.string().optional(),
+  skillId: z.string().optional(),
+  status: z.enum(["requested", "pending_approval", "completed", "degraded", "denied", "failed"]),
+  permissionAudit: extensionInvocationAuditSchema,
+  inputDigest: z.string(),
+  inputSummary: z.record(z.unknown()),
+  scope: z.record(z.unknown()),
+  resultSummary: z.record(z.unknown()).optional(),
+  degradedReason: z.string().optional(),
+  createdAt: z.string()
+});
+export type CapabilityAuditEvent = z.infer<typeof capabilityAuditEventSchema>;
 
 export const invokeExtensionSchema = z.object({
   capabilityId: z.string().optional(),
@@ -664,6 +693,99 @@ export const invokeExtensionSchema = z.object({
   sessionId: z.string().min(1).max(160).optional()
 });
 export type InvokeExtensionInput = z.infer<typeof invokeExtensionSchema>;
+
+export const workspacePathSchema = z.string().min(1).max(4_000);
+export const workspaceListSchema = z.object({ path: workspacePathSchema.default("."), depth: z.coerce.number().int().min(0).max(8).default(2), limit: z.coerce.number().int().positive().max(1_000).default(200) });
+export const workspaceReadFileSchema = z.object({ path: workspacePathSchema, maxBytes: z.coerce.number().int().positive().max(1_000_000).default(200_000) });
+export const workspaceSearchSchema = z.object({ query: z.string().min(1).max(500), path: workspacePathSchema.default("."), maxResults: z.coerce.number().int().positive().max(200).default(50) });
+export const workspaceWriteFileSchema = z.object({ path: workspacePathSchema, content: z.string().max(2_000_000), createOnly: z.coerce.boolean().default(false) });
+export const workspaceApplyPatchSchema = z.object({ patch: z.string().min(1).max(2_000_000), cwd: workspacePathSchema.default(".") });
+export const workspaceRunScriptSchema = z.object({ command: z.enum(["test", "build", "typecheck", "lint", "smoke"]), cwd: workspacePathSchema.default("."), timeoutMs: z.coerce.number().int().positive().max(300_000).default(120_000) });
+export const workspaceGitSchema = z.object({ cwd: workspacePathSchema.default("."), includeDiff: z.coerce.boolean().default(true), maxBytes: z.coerce.number().int().positive().max(500_000).default(120_000) });
+export const artifactWriteMarkdownSchema = z.object({
+  path: workspacePathSchema,
+  title: z.string().min(1).max(240).optional(),
+  content: z.string().min(1).max(1_000_000),
+  createOnly: z.coerce.boolean().default(false)
+});
+export type ArtifactWriteMarkdownInput = z.infer<typeof artifactWriteMarkdownSchema>;
+
+export const artifactWriteCsvSchema = z.object({
+  path: workspacePathSchema,
+  columns: z.array(z.string().min(1).max(240)).min(1).max(80),
+  rows: z.array(z.array(z.union([z.string().max(20_000), z.number(), z.boolean(), z.null()])).max(80)).max(10_000),
+  createOnly: z.coerce.boolean().default(false)
+});
+export type ArtifactWriteCsvInput = z.infer<typeof artifactWriteCsvSchema>;
+
+export const webReadUrlSchema = z.object({
+  url: z.string().url().max(2_000),
+  maxBytes: z.coerce.number().int().positive().max(1_000_000).default(400_000)
+});
+export type WebReadUrlInput = z.infer<typeof webReadUrlSchema>;
+
+export const webSearchSchema = z.object({
+  query: z.string().min(2).max(500),
+  maxResults: z.coerce.number().int().positive().max(8).default(5)
+});
+export type WebSearchInput = z.infer<typeof webSearchSchema>;
+export const skillScriptExecuteSchema = z.object({
+  skillId: z.string().regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/).max(120),
+  version: z.string().min(1).max(80).optional(),
+  scriptPath: workspacePathSchema,
+  args: z.array(z.string().max(1_000)).max(20).default([]),
+  timeoutMs: z.coerce.number().int().positive().max(60_000).default(15_000),
+  maxOutputBytes: z.coerce.number().int().positive().max(200_000).default(50_000)
+});
+export type SkillScriptExecuteInput = z.infer<typeof skillScriptExecuteSchema>;
+
+export const mcpToolPolicySchema = z.object({
+  effects: z.array(z.enum(["read", "local_write", "provider_call", "external_write", "credential", "destructive"])).min(1).default(["provider_call"]),
+  riskLevel: z.enum(["low", "medium", "high", "critical"]).default("medium"),
+  executionPolicy: z.enum(["auto", "single_approval", "session_approval", "always_deny"]).default("auto")
+});
+
+export const mcpToolSchema = z.object({
+  name: z.string().min(1).max(160),
+  description: z.string().max(4_000).default(""),
+  inputSchema: z.record(z.unknown()).default({}),
+  discoveredAt: z.string()
+});
+export type McpTool = z.infer<typeof mcpToolSchema>;
+
+export const createMcpServerSchema = z.object({
+  id: z.string().regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/).max(80),
+  name: z.string().min(1).max(120),
+  command: z.string().min(1).max(1_000),
+  args: z.array(z.string().max(2_000)).max(40).default([]),
+  cwd: z.string().max(4_000).optional(),
+  toolPolicies: z.record(mcpToolPolicySchema).default({})
+});
+export type CreateMcpServerInput = z.infer<typeof createMcpServerSchema>;
+
+export const updateMcpServerSchema = createMcpServerSchema.partial().omit({ id: true }).extend({ enabled: z.boolean().optional() });
+export type UpdateMcpServerInput = z.infer<typeof updateMcpServerSchema>;
+
+export const mcpServerSchema = createMcpServerSchema.extend({
+  enabled: z.boolean(),
+  tools: z.array(mcpToolSchema).default([]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastDiscoveredAt: z.string().optional(),
+  degradedReason: z.string().optional()
+});
+export type McpServer = z.infer<typeof mcpServerSchema>;
+
+export const codeTaskWorkflowSchema = z.object({
+  goal: z.string().min(3).max(4_000),
+  cwd: workspacePathSchema.default("."),
+  files: z.array(workspacePathSchema).max(30).default([]),
+  patch: z.string().min(1).max(2_000_000).optional(),
+  testCommand: z.enum(["test", "build", "typecheck", "lint", "smoke"]).optional(),
+  requireApproval: z.coerce.boolean().default(false),
+  maxRetries: z.coerce.number().int().min(0).max(3).default(1)
+});
+export type CodeTaskWorkflowInput = z.infer<typeof codeTaskWorkflowSchema>;
 
 export const localSkillManifestSchema = z.object({
   id: z.string().regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/).max(120),
@@ -690,6 +812,8 @@ export const localSkillRecordSchema = localSkillManifestSchema.extend({
   status: z.enum(["active", "disabled"]),
   sourcePath: z.string(),
   contentHash: z.string(),
+  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/i).optional(),
+  validation: z.object({ fileCount: z.number().int().nonnegative(), totalBytes: z.number().int().nonnegative(), validatedAt: z.string() }).optional(),
   installedAt: z.string(),
   enabledAt: z.string().optional()
 });

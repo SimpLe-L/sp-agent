@@ -148,6 +148,9 @@ export function SkillCatalog() {
             </div>
           </details>
         </section>
+        <section className="border-b px-5 py-3 text-xs leading-relaxed text-muted-foreground" data-testid="skill-safety-policy">
+          Imported packages stay disabled until enabled. Instructions and references load on demand; package code never runs during import.
+        </section>
         {status && <p className="border-b px-5 py-2.5 text-[13px] text-muted-foreground" data-testid="skill-catalog-status">{status}</p>}
         <div className="grid min-h-0 gap-3 overflow-auto p-3.5" data-testid="skill-catalog-list">
           {extensions.length === 0 ? (
@@ -214,6 +217,10 @@ function SkillCatalogItem({ extension, onManage, loading }: { extension: Extensi
                   <div className="grid gap-0.5">
                     <dt className={skillMetaLabelClass}>Permissions</dt>
                     <dd className={skillMetaValueClass}>{capability.permissions.join(", ") || "none"}</dd>
+                  </div>
+                  <div className="grid gap-0.5">
+                    <dt className={skillMetaLabelClass}>Effects and risk</dt>
+                    <dd className={skillMetaValueClass}>{capability.effects?.join(", ") || "read"} · {capability.riskLevel ?? "low"} · {capability.executionPolicy ?? "auto"}</dd>
                   </div>
                 </dl>
               </div>

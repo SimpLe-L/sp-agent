@@ -2,7 +2,10 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from "@nes
 import { findCapability, getExtensionManifest, getExtensionRuntimeStatus, parseExtensionCapabilityInput } from "@sp-agent/extensions";
 import { getSpeechStatus } from "@sp-agent/speech";
 import {
+  artifactWriteCsvSchema,
+  artifactWriteMarkdownSchema,
   consolidateMemorySchema,
+  extractMemoryFromSessionSchema,
   contextBriefingSchema,
   createMemoryCandidateSchema,
   localBookmarkConnectorFileSchema,
@@ -13,15 +16,36 @@ import {
   promoteMemorySchema,
   projectDocSearchSchema,
   searchMemorySchema,
+  summarizeMemorySessionSchema,
   type ExtensionCapability,
+  type ExtensionManifest,
   type ExtensionInvocationAudit,
   type InvokeExtensionInput,
-  updateMemorySchema
+  updateMemorySchema,
+  voiceSynthesizeSchema,
+  voiceTranscribeSchema,
+  workspaceApplyPatchSchema,
+  workspaceGitSchema,
+  workspaceListSchema,
+  workspaceReadFileSchema,
+  workspaceRunScriptSchema,
+  workspaceSearchSchema,
+  workspaceWriteFileSchema,
+  webReadUrlSchema,
+  webSearchSchema,
+  skillScriptExecuteSchema
 } from "@sp-agent/shared";
 import { ApprovalsService } from "./approvals.service.js";
 import { LocalJsonStore } from "./local-json-store.service.js";
 import { MemoryService } from "./memory.service.js";
 import { WorkflowsService } from "./workflows.service.js";
+import { WorkspaceService } from "./workspace.service.js";
+import { SkillScriptService } from "./skill-script.service.js";
+import { CapabilityAuditService } from "./capability-audit.service.js";
+import { McpService } from "./mcp.service.js";
+import { SpeechIoService } from "./speech-io.service.js";
+import { ArtifactService } from "./artifact.service.js";
+import { WebService } from "./web.service.js";
 
 type ExtensionInvocationResponse = {
   extensionId: string;
@@ -39,6 +63,11 @@ type ExtensionHandler = {
   handle: (request: InvokeExtensionInput, audit: ExtensionInvocationAudit) => Promise<ExtensionInvocationResponse>;
 };
 
+export type ExtensionInvocationContext = {
+  runtimeId?: string;
+  skillId?: string;
+};
+
 @Injectable()
 export class ExtensionsService {
   private readonly handlers: ExtensionHandler[];
@@ -47,6 +76,13 @@ export class ExtensionsService {
     @Inject(MemoryService) private readonly memoryService: MemoryService,
     @Inject(ApprovalsService) private readonly approvalsService: ApprovalsService,
     @Inject(WorkflowsService) private readonly workflowsService: WorkflowsService,
+    @Inject(WorkspaceService) private readonly workspaceService: WorkspaceService,
+    @Inject(SkillScriptService) private readonly skillScriptService: SkillScriptService,
+    @Inject(CapabilityAuditService) private readonly capabilityAuditService: CapabilityAuditService,
+    @Inject(McpService) private readonly mcpService: McpService,
+    @Inject(SpeechIoService) private readonly speechIoService: SpeechIoService,
+    @Inject(ArtifactService) private readonly artifactService: ArtifactService,
+    @Inject(WebService) private readonly webService: WebService,
     @Inject(LocalJsonStore) private readonly store: LocalJsonStore
   ) {
     this.handlers = [
@@ -63,56 +99,49 @@ export class ExtensionsService {
       {
         extensionId: "local.memory",
         capabilityId: "memory.write_candidate",
-        handle: async (request, audit) => {
-          const approval = await this.ensureApproved(request, audit, "Create durable memory write candidate.");
-          if (!approval.approved) return approval.response;
-          const result = await this.memoryService.createCandidate(createMemoryCandidateSchema.parse(request.input));
-          return this.completedAfterApproval(
-            approval.approval,
-            "local.memory",
-            "memory.write_candidate",
-            audit,
-            result
-          );
-        }
+        handle: async (request, audit) => this.completed("local.memory", "memory.write_candidate", audit, await this.memoryService.createCandidate(createMemoryCandidateSchema.parse(request.input)))
       },
       {
         extensionId: "local.memory",
         capabilityId: "memory.promote_fact",
         handle: async (request, audit) => {
-          const approval = await this.ensureApproved(request, audit, "Promote a memory candidate into an accepted durable fact.");
-          if (!approval.approved) return approval.response;
           const id = requiredString(request.input.id, "id");
-          const result = await this.memoryService.promote(id, promoteMemorySchema.parse(request.input));
-          return this.completedAfterApproval(approval.approval, "local.memory", "memory.promote_fact", audit, result);
+          return this.completed("local.memory", "memory.promote_fact", audit, await this.memoryService.promote(id, promoteMemorySchema.parse(request.input)));
         }
       },
       {
         extensionId: "local.memory",
         capabilityId: "memory.update",
         handle: async (request, audit) => {
-          const approval = await this.ensureApproved(request, audit, "Update a durable memory entry.");
-          if (!approval.approved) return approval.response;
           const id = requiredString(request.input.id, "id");
-          const result = await this.memoryService.update(id, updateMemorySchema.parse(request.input));
-          return this.completedAfterApproval(approval.approval, "local.memory", "memory.update", audit, result);
+          return this.completed("local.memory", "memory.update", audit, await this.memoryService.update(id, updateMemorySchema.parse(request.input)));
         }
       },
       {
         extensionId: "local.memory",
         capabilityId: "memory.merge",
-        handle: async (request, audit) => {
-          const approval = await this.ensureApproved(request, audit, "Merge related memory entries and tombstone superseded sources.");
-          if (!approval.approved) return approval.response;
-          const result = await this.memoryService.merge(mergeMemorySchema.parse(request.input));
-          return this.completedAfterApproval(approval.approval, "local.memory", "memory.merge", audit, result);
-        }
+        handle: async (request, audit) => this.completed("local.memory", "memory.merge", audit, await this.memoryService.merge(mergeMemorySchema.parse(request.input)))
       },
       {
         extensionId: "local.memory",
         capabilityId: "memory.consolidate",
         handle: async (request, audit) =>
           this.completed("local.memory", "memory.consolidate", audit, await this.memoryService.consolidate(consolidateMemorySchema.parse(request.input ?? {})))
+      },
+      {
+        extensionId: "local.memory",
+        capabilityId: "memory.forget",
+        handle: async (request, audit) => this.completed("local.memory", "memory.forget", audit, await this.memoryService.tombstone(requiredString(request.input.id, "id")))
+      },
+      {
+        extensionId: "local.memory",
+        capabilityId: "memory.extract_session",
+        handle: async (request, audit) => this.completed("local.memory", "memory.extract_session", audit, await this.memoryService.extractFromSession(extractMemoryFromSessionSchema.parse(request.input)))
+      },
+      {
+        extensionId: "local.memory",
+        capabilityId: "memory.summarize_session",
+        handle: async (request, audit) => this.completed("local.memory", "memory.summarize_session", audit, await this.memoryService.summarizeSession(summarizeMemorySessionSchema.parse(request.input)))
       },
       {
         extensionId: "local.context",
@@ -124,6 +153,81 @@ export class ExtensionsService {
             runtimeProvider: process.env.AGENT_RUNTIME_PROVIDER ?? "pi",
             extensionIds: (await this.list()).extensions.map((item) => item.id)
           })
+      },
+      {
+        extensionId: "local.workspace",
+        capabilityId: "workspace.list",
+        handle: async (request, audit) => this.completed("local.workspace", "workspace.list", audit, await this.workspaceService.list(...workspaceListArgs(workspaceListSchema.parse(request.input))))
+      },
+      {
+        extensionId: "local.skill-sandbox",
+        capabilityId: "skill.run_sandboxed_script",
+        handle: async (request, audit) => {
+          const result = await this.skillScriptService.execute(skillScriptExecuteSchema.parse(request.input));
+          return result.status === "completed"
+            ? this.completed("local.skill-sandbox", "skill.run_sandboxed_script", audit, result)
+            : { extensionId: "local.skill-sandbox", capabilityId: "skill.run_sandboxed_script", permissionAudit: audit, status: "degraded" as const, result, degradedReason: result.degradedReason };
+        }
+      },
+      {
+        extensionId: "local.speech",
+        capabilityId: "speech.transcribe",
+        handle: async (request, audit) => this.completed("local.speech", "speech.transcribe", audit, await this.speechIoService.transcribe(voiceTranscribeSchema.parse(request.input)))
+      },
+      {
+        extensionId: "local.speech",
+        capabilityId: "speech.synthesize",
+        handle: async (request, audit) => this.completed("local.speech", "speech.synthesize", audit, await this.speechIoService.synthesize(voiceSynthesizeSchema.parse(request.input)))
+      },
+      {
+        extensionId: "local.workspace",
+        capabilityId: "workspace.read_file",
+        handle: async (request, audit) => { const input = workspaceReadFileSchema.parse(request.input); return this.completed("local.workspace", "workspace.read_file", audit, await this.workspaceService.read(input.path, input.maxBytes)); }
+      },
+      {
+        extensionId: "local.workspace",
+        capabilityId: "workspace.search",
+        handle: async (request, audit) => { const input = workspaceSearchSchema.parse(request.input); return this.completed("local.workspace", "workspace.search", audit, await this.workspaceService.search(input.query, input.path, input.maxResults)); }
+      },
+      {
+        extensionId: "local.workspace",
+        capabilityId: "workspace.write_file",
+        handle: async (request, audit) => { const input = workspaceWriteFileSchema.parse(request.input); return this.completed("local.workspace", "workspace.write_file", audit, await this.workspaceService.write(input.path, input.content, input.createOnly)); }
+      },
+      {
+        extensionId: "local.workspace",
+        capabilityId: "workspace.apply_patch",
+        handle: async (request, audit) => { const input = workspaceApplyPatchSchema.parse(request.input); return this.completed("local.workspace", "workspace.apply_patch", audit, await this.workspaceService.applyPatch(input.patch, input.cwd)); }
+      },
+      {
+        extensionId: "local.workspace",
+        capabilityId: "workspace.run_script",
+        handle: async (request, audit) => { const input = workspaceRunScriptSchema.parse(request.input); return this.completed("local.workspace", "workspace.run_script", audit, await this.workspaceService.runScript(input.command, input.cwd, input.timeoutMs)); }
+      },
+      {
+        extensionId: "local.workspace",
+        capabilityId: "workspace.git_status",
+        handle: async (request, audit) => { const input = workspaceGitSchema.parse(request.input); return this.completed("local.workspace", "workspace.git_status", audit, await this.workspaceService.gitStatus(input.cwd, input.includeDiff, input.maxBytes)); }
+      },
+      {
+        extensionId: "local.artifacts",
+        capabilityId: "artifact.write_markdown",
+        handle: async (request, audit) => this.completed("local.artifacts", "artifact.write_markdown", audit, await this.artifactService.writeMarkdown(artifactWriteMarkdownSchema.parse(request.input)))
+      },
+      {
+        extensionId: "local.artifacts",
+        capabilityId: "artifact.write_csv",
+        handle: async (request, audit) => this.completed("local.artifacts", "artifact.write_csv", audit, await this.artifactService.writeCsv(artifactWriteCsvSchema.parse(request.input)))
+      },
+      {
+        extensionId: "remote.web",
+        capabilityId: "web.search",
+        handle: async (request, audit) => this.webResponse("remote.web", "web.search", audit, await this.webService.search(webSearchSchema.parse(request.input)))
+      },
+      {
+        extensionId: "remote.web",
+        capabilityId: "web.read_url",
+        handle: async (request, audit) => this.webResponse("remote.web", "web.read_url", audit, await this.webService.read(webReadUrlSchema.parse(request.input)))
       },
       {
         extensionId: "local.context",
@@ -168,14 +272,17 @@ export class ExtensionsService {
     const speechStatus = await getSpeechStatus();
     return {
       ...status,
-      extensions: status.extensions.map((extension) => {
+      extensions: [
+        ...status.extensions.map((extension) => {
         if (extension.id !== "local.speech") return extension;
         return {
           ...extension,
           status: speechStatus.ready ? "active" as const : "degraded" as const,
           degradedReason: speechStatus.ready ? undefined : speechStatus.degradedReason ?? extension.degradedReason
         };
-      })
+        }),
+        ...(await this.mcpService.manifests())
+      ] as ExtensionManifest[]
     };
   }
 
@@ -185,34 +292,95 @@ export class ExtensionsService {
     return extension;
   }
 
-  getInvocationAudit(id: string, capabilityId?: string): ExtensionInvocationAudit {
-    const extension = getExtensionManifest(id);
+  private async resolveManifest(id: string) {
+    if (!id.startsWith("mcp.")) return getExtensionManifest(id);
+    return (await this.mcpService.manifests()).find((extension) => extension.id === id) as ExtensionManifest | undefined;
+  }
+
+  async getInvocationAudit(id: string, capabilityId?: string): Promise<ExtensionInvocationAudit> {
+    const extension = await this.resolveManifest(id);
     if (!extension) throw new NotFoundException(`Extension ${id} not found`);
     const requestedCapabilityId = capabilityId ?? defaultCapabilityId(id);
     return buildPermissionAudit(id, requestedCapabilityId, findCapability(extension.capabilities, requestedCapabilityId));
   }
 
-  async invoke(id: string, request: InvokeExtensionInput) {
-    const extension = getExtensionManifest(id);
+  async invoke(id: string, request: InvokeExtensionInput, context: ExtensionInvocationContext = {}) {
+    const extension = await this.resolveManifest(id);
     if (!extension) throw new NotFoundException(`Extension ${id} not found`);
     const requestedCapabilityId = request.capabilityId ?? defaultCapabilityId(id);
     const audit = buildPermissionAudit(id, requestedCapabilityId, findCapability(extension.capabilities, requestedCapabilityId));
+    const normalizedRequest = {
+      ...request,
+      input: id.startsWith("mcp.") ? request.input : parseExtensionCapabilityInput(id, requestedCapabilityId, request.input) as Record<string, unknown>
+    };
+    const auditContext = { sessionId: request.sessionId, ...context };
+    await this.capabilityAuditService.record({
+      extensionId: id,
+      capabilityId: requestedCapabilityId,
+      ...auditContext,
+      status: "requested",
+      permissionAudit: audit,
+      input: normalizedRequest.input
+    });
 
-    const handler = this.handlers.find((item) => item.extensionId === id && item.capabilityId === requestedCapabilityId);
-    if (handler) return handler.handle({ ...request, input: parseExtensionCapabilityInput(id, requestedCapabilityId, request.input) as Record<string, unknown> }, audit);
-
-    if (id === "local.speech") {
-      return {
+    if (!audit.allowed || audit.mode === "denied") {
+      await this.capabilityAuditService.record({
         extensionId: id,
         capabilityId: requestedCapabilityId,
+        ...auditContext,
+        status: "denied",
         permissionAudit: audit,
-        status: "degraded",
-        result: null,
-        degradedReason: extension.degradedReason ?? `${id} is planned but not implemented yet.`
-      };
+        input: normalizedRequest.input,
+        degradedReason: audit.reason
+      });
+      throw new BadRequestException("Capability is denied by its execution policy.");
     }
 
-    throw new BadRequestException(`Capability ${requestedCapabilityId} is not invokable for ${id}`);
+    const approval = await this.ensureApproved(normalizedRequest, audit, approvalReason(id, requestedCapabilityId));
+    if (!approval.approved) {
+      await this.capabilityAuditService.record({
+        extensionId: id,
+        capabilityId: requestedCapabilityId,
+        ...auditContext,
+        status: "pending_approval",
+        permissionAudit: audit,
+        input: normalizedRequest.input,
+        degradedReason: approval.response.degradedReason
+      });
+      return approval.response;
+    }
+
+    const handler = this.handlers.find((item) => item.extensionId === id && item.capabilityId === requestedCapabilityId);
+    try {
+      const response = handler
+        ? await handler.handle(normalizedRequest, audit)
+        : id.startsWith("mcp.")
+          ? this.completed(id, requestedCapabilityId, audit, await this.mcpService.invoke(id, requestedCapabilityId, normalizedRequest.input))
+          : (() => { throw new BadRequestException(`Capability ${requestedCapabilityId} is not invokable for ${id}`); })();
+      if (approval.approval) await this.approvalsService.consumeApproved(approval.approval.id);
+      await this.capabilityAuditService.record({
+        extensionId: id,
+        capabilityId: requestedCapabilityId,
+        ...auditContext,
+        status: response.status === "completed" ? "completed" : "degraded",
+        permissionAudit: audit,
+        input: normalizedRequest.input,
+        result: response.result,
+        degradedReason: response.degradedReason
+      });
+      return response;
+    } catch (error) {
+      await this.capabilityAuditService.record({
+        extensionId: id,
+        capabilityId: requestedCapabilityId,
+        ...auditContext,
+        status: "failed",
+        permissionAudit: audit,
+        input: normalizedRequest.input,
+        degradedReason: error instanceof Error ? error.message : "Extension invocation failed."
+      });
+      throw error;
+    }
   }
 
   private completed(extensionId: string, capabilityId: string, permissionAudit: ExtensionInvocationAudit, result: unknown): ExtensionInvocationResponse {
@@ -225,19 +393,14 @@ export class ExtensionsService {
     };
   }
 
-  private async completedAfterApproval(
-    approval: { id: string } | undefined,
-    extensionId: string,
-    capabilityId: string,
-    permissionAudit: ExtensionInvocationAudit,
-    result: unknown
-  ) {
-    if (approval) await this.approvalsService.consumeApproved(approval.id);
-    return this.completed(extensionId, capabilityId, permissionAudit, result);
+  private webResponse(extensionId: string, capabilityId: string, permissionAudit: ExtensionInvocationAudit, result: { degradedReason?: string }) {
+    return result.degradedReason
+      ? { extensionId, capabilityId, permissionAudit, status: "degraded" as const, result, degradedReason: result.degradedReason }
+      : this.completed(extensionId, capabilityId, permissionAudit, result);
   }
 
   private async ensureApproved(request: InvokeExtensionInput, audit: ExtensionInvocationAudit, reason: string) {
-    if (audit.mode === "read_only") return { approved: true as const, approval: undefined };
+    if (audit.mode === "read_only" || audit.mode === "trusted_local") return { approved: true as const, approval: undefined };
     if (request.approvalId) {
       const approved = await this.approvalsService.requireApprovedFor(request.approvalId, {
         extensionId: audit.extensionId,
@@ -255,7 +418,7 @@ export class ExtensionsService {
       reason,
       permissions: audit.permissions,
       input: request.input,
-      executionPolicy: "single_use",
+      executionPolicy: audit.executionPolicy === "session_approval" ? "reusable" : "single_use",
       idempotencyKey: request.idempotencyKey,
       sessionId: request.sessionId
     });
@@ -411,7 +574,7 @@ export class ExtensionsService {
 }
 
 export function isReadOnlyExtensionCapability(audit: ExtensionInvocationAudit) {
-  return audit.allowed && audit.mode === "read_only";
+  return audit.allowed && (audit.mode === "read_only" || audit.mode === "trusted_local");
 }
 
 function defaultCapabilityId(id: string) {
@@ -419,6 +582,10 @@ function defaultCapabilityId(id: string) {
   if (id === "local.memory") return "memory.search";
   if (id === "local.context") return "context.snapshot";
   if (id === "local.project") return "project.search_docs";
+  if (id === "local.workspace") return "workspace.list";
+  if (id === "local.artifacts") return "artifact.write_markdown";
+  if (id === "remote.web") return "web.search";
+  if (id === "local.skill-sandbox") return "skill.run_sandboxed_script";
   if (id === "local.bookmarks") return "bookmarks.search";
   if (id === "local.speech") return "speech.transcribe";
   return "extensions.inspect";
@@ -431,31 +598,35 @@ function buildPermissionAudit(extensionId: string, capabilityId: string, capabil
       capabilityId,
       permissions: [],
       allowed: false,
-      mode: "write_or_provider",
+      effects: [],
+      riskLevel: "critical",
+      executionPolicy: "always_deny",
+      mode: "denied",
       reason: "Capability is not registered."
     };
   }
   const permissions = capability.permissions ?? [];
-  const requiresApproval = permissions.some((permission) => {
-    const normalized = permission.toLowerCase();
-    return (
-      normalized.includes("credential") ||
-      normalized.includes("secret") ||
-      normalized.includes("private_key") ||
-      normalized.includes("external:write") ||
-      normalized.includes("account:") ||
-      normalized.includes("payment") ||
-      normalized.includes("destructive")
-    );
-  });
+  const effects: NonNullable<ExtensionCapability["effects"]> = capability.effects?.length ? capability.effects : ["read"];
+  const riskLevel = capability.riskLevel ?? "low";
+  const executionPolicy = capability.executionPolicy ?? (effects.some((effect) => ["credential", "external_write", "destructive"].includes(effect)) ? "single_approval" : "auto");
+  const requiresApproval = executionPolicy === "single_approval" || executionPolicy === "session_approval";
   return {
     extensionId,
     capabilityId,
     permissions,
+    effects,
+    riskLevel,
+    executionPolicy,
     allowed: true,
-    mode: requiresApproval ? "write_or_provider" : "read_only",
-    reason: requiresApproval ? "Capability can access secrets, create an external account action, or perform a destructive operation." : "Trusted local capability is allowed to run directly."
+    mode: executionPolicy === "always_deny" ? "denied" : requiresApproval ? "approval_required" : effects.includes("read") && effects.length === 1 ? "read_only" : "trusted_local",
+    reason: executionPolicy === "always_deny" ? "Capability is explicitly denied by execution policy." : requiresApproval ? "Capability requires explicit approval under its execution policy." : "Trusted local capability is allowed to run directly and is auditable."
   };
+}
+
+function workspaceListArgs(input: { path: string; depth: number; limit: number }): [string, number, number] { return [input.path, input.depth, input.limit]; }
+
+function approvalReason(extensionId: string, capabilityId: string) {
+  return `Explicit approval is required for ${extensionId}.${capabilityId}.`;
 }
 
 function requiredString(value: unknown, name: string) {

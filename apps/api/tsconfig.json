@@ -7,24 +7,5 @@
     "moduleResolution": "NodeNext",
     "module": "NodeNext"
   },
-  "include": [
-    "src/env.ts",
-    "src/main.ts",
-    "src/modules/app.module.ts",
-    "src/modules/agent-shell.controller.ts",
-    "src/modules/agent-shell.service.ts",
-    "src/modules/chat.controller.ts",
-    "src/modules/chat.service.ts",
-    "src/modules/extensions.controller.ts",
-    "src/modules/extensions.service.ts",
-    "src/modules/health.controller.ts",
-    "src/modules/local-json-store.service.ts",
-    "src/modules/memory.controller.ts",
-    "src/modules/memory-embedding.service.ts",
-    "src/modules/memory.service.ts",
-    "src/modules/memory-vector.service.ts",
-    "src/modules/providers.controller.ts",
-    "src/modules/settings.controller.ts",
-    "src/modules/settings.service.ts"
-  ]
+  "include": ["src/**/*.ts"]
 }

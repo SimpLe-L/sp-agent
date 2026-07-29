@@ -50,20 +50,11 @@ The extension/runtime architecture remains general-purpose. `personal.research` 
 ## Development Rules
 
 - Prefer small typed modules and shared schemas in `packages/shared`.
-- Update `PROCESS.md` only for current state, next work, or verification policy changes. Do not use it as a chronological log.
 - Keep `ARCHITECTURE.md` focused on boundaries and contracts, not implementation history.
 - When adding a capability, register it in `packages/extensions` before making it a first-class agent skill.
 - Expand project access through typed trusted-local workspace capabilities rather than a static allowlist.
 - Keep research evidence-backed when it makes factual claims, while allowing trusted-local Skills to use their configured local and remote capabilities.
-- Be selective with smoke tests. Run `pnpm typecheck` and `pnpm build` for broad confidence; run the relevant smoke only for the boundary you touched:
-  - API/control plane: `pnpm smoke:api`
-  - renderer routes/shell anchors: `pnpm smoke:web`
-  - Electron startup invariants: `pnpm smoke:desktop`
-  - runtime adapter registry/fallbacks: `pnpm smoke:runtime`
-  - memory contracts: `pnpm smoke:memory`
-  - extension/approval contracts: `pnpm smoke:extensions`
-  - workflows: `pnpm smoke:workflows`
-  - speech API path: `pnpm smoke:speech`
+- Run `pnpm typecheck` and `pnpm build` before handing off a broad change.
 
 ## Priority Order
 

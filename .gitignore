@@ -15,3 +15,7 @@ apps/*/.sp-agent-data/
 
 # OS/editor noise
 .DS_Store
+examples
+PROJECT_OPTIMIZATION_AND_RESUME.md
+PROCESS.md
+interview-project-brief.md

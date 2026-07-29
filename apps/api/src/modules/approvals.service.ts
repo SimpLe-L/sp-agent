@@ -19,27 +19,33 @@ export class ApprovalsService {
   }
 
   async create(input: CreateApprovalRequestInput) {
-    const now = new Date().toISOString();
-    const request: ApprovalRequest = {
-      id: `approval_${crypto.randomUUID()}`,
-      extensionId: input.extensionId,
-      capabilityId: input.capabilityId,
-      action: input.action,
-      reason: input.reason,
-      permissions: input.permissions,
-      input: input.input,
-      status: "pending",
-      executionPolicy: input.executionPolicy ?? "single_use",
-      idempotencyKey: input.idempotencyKey,
-      sessionId: input.sessionId,
-      createdAt: now,
-      updatedAt: now,
-      expiresAt: approvalExpiry(now)
-    };
-    const file = await this.readFile();
-    file.requests.push(request);
-    await this.writeFile(file);
-    return { approval: request };
+    return this.store.mutate<ApprovalsFile, { approval: ApprovalRequest }>("approvals.json", { requests: [] }, (raw) => {
+      const file = normalizeFile(raw);
+      if (input.idempotencyKey) {
+        const existing = file.requests.find((request) => request.idempotencyKey === input.idempotencyKey && request.action === input.action && request.sessionId === input.sessionId);
+        if (existing) return { approval: existing };
+      }
+      const now = new Date().toISOString();
+      const request: ApprovalRequest = {
+        id: `approval_${crypto.randomUUID()}`,
+        extensionId: input.extensionId,
+        capabilityId: input.capabilityId,
+        action: input.action,
+        reason: input.reason,
+        permissions: input.permissions,
+        input: input.input,
+        status: "pending",
+        executionPolicy: input.executionPolicy ?? "single_use",
+        idempotencyKey: input.idempotencyKey,
+        sessionId: input.sessionId,
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: approvalExpiry(now)
+      };
+      file.requests.push(request);
+      raw.requests = file.requests;
+      return { approval: request };
+    });
   }
 
   async decide(id: string, input: DecideApprovalRequestInput) {
@@ -94,20 +100,19 @@ export class ApprovalsService {
   }
 
   async consumeApproved(id: string) {
-    const file = await this.readFile();
-    const request = findApproval(file, id);
-    if (request.executionPolicy === "reusable") return request;
-    if (expireRequest(request)) {
-      await this.writeFile(file);
-      throw new BadRequestException(`Approval request ${id} has expired`);
-    }
-    if (request.status !== "approved") throw new BadRequestException(`Approval request ${id} is already ${request.status}`);
-    const now = new Date().toISOString();
-    request.status = "consumed";
-    request.consumedAt = now;
-    request.updatedAt = now;
-    await this.writeFile(file);
-    return request;
+    return this.store.mutate<ApprovalsFile, ApprovalRequest>("approvals.json", { requests: [] }, (raw) => {
+      const file = normalizeFile(raw);
+      const request = findApproval(file, id);
+      if (request.executionPolicy === "reusable") return request;
+      if (expireRequest(request)) throw new BadRequestException(`Approval request ${id} has expired`);
+      if (request.status !== "approved") throw new BadRequestException(`Approval request ${id} is already ${request.status}`);
+      const now = new Date().toISOString();
+      request.status = "consumed";
+      request.consumedAt = now;
+      request.updatedAt = now;
+      raw.requests = file.requests;
+      return request;
+    });
   }
 
   private async readFile(): Promise<ApprovalsFile> {
@@ -156,4 +161,8 @@ function stableStringify(value: unknown): string {
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
     .join(",")}}`;
+}
+
+function normalizeFile(file: ApprovalsFile): ApprovalsFile {
+  return { requests: (file.requests ?? []).map((request) => approvalRequestSchema.parse(request)) };
 }

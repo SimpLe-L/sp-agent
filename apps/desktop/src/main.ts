@@ -7,7 +7,8 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "../../..");
 const apiPort = Number(process.env.PORT ?? 4317);
-const apiBaseUrl = process.env.API_BASE_URL ?? `http://localhost:${apiPort}/api`;
+const apiBaseUrl = process.env.API_BASE_URL ?? `http://127.0.0.1:${apiPort}/api`;
+const apiToken = crypto.randomUUID();
 const rendererUrl = process.env.RENDERER_URL;
 let apiProcess: ChildProcess | undefined;
 
@@ -29,7 +30,7 @@ async function sleep(ms: number) {
 
 async function isApiReachable(): Promise<boolean> {
   try {
-    const response = await fetch(`${apiBaseUrl}/health`, { signal: AbortSignal.timeout(1500) });
+    const response = await fetch(`${apiBaseUrl}/health`, { headers: { authorization: `Bearer ${apiToken}` }, signal: AbortSignal.timeout(1500) });
     return response.ok;
   } catch {
     return false;
@@ -57,7 +58,10 @@ async function ensureApiProcess(): Promise<void> {
     cwd: repoRoot,
     env: {
       ...process.env,
-      PORT: String(apiPort)
+      PORT: String(apiPort),
+      SP_AGENT_API_TOKEN: apiToken,
+      SP_AGENT_REQUIRE_AUTH: "1",
+      SP_AGENT_RENDERER_ORIGIN: rendererUrl
     },
     stdio: "inherit"
   });
@@ -118,6 +122,7 @@ app.whenReady().then(() => {
     const result = await dialog.showOpenDialog({ title: "Choose a Skill folder", properties: ["openDirectory"] });
     return result.canceled ? undefined : result.filePaths[0];
   });
+  ipcMain.handle("api:get-token", () => apiToken);
   void createWindow();
 });
 
