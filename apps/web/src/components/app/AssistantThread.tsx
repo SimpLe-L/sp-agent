@@ -4,6 +4,7 @@ import { AlertTriangle, ArrowDown, ArrowUp, BookOpenCheck, Check, ChevronDown, C
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { VoiceRecorderButton } from "./VoiceRecorderButton";
+import { MarkdownMessage } from "./MarkdownMessage";
 import { cn } from "@/lib/utils";
 import type { AgentArtifact } from "@/app/types";
 
@@ -96,7 +97,7 @@ function AssistantThreadMessage() {
               <span key={index} className="size-0.5 rounded-full bg-current opacity-40" />
             ))}
           </span>
-          <span>Connecting</span>
+          <span>正在思考</span>
         </span>
       )}
       <MessageActions role={role} />
@@ -138,7 +139,7 @@ function AssistantMessageParts() {
   return (
     <MessagePrimitive.Parts>
       {({ part }) => {
-        if (part.type === "text" || part.type === "reasoning") return <p>{part.text}</p>;
+        if (part.type === "text" || part.type === "reasoning") return <MarkdownMessage content={part.text} />;
         if (part.type === "tool-call") return <p>{`Tool: ${part.toolName}`}</p>;
         if (part.type === "source") return <p>{part.title ?? part.url ?? "Source"}</p>;
         return null;

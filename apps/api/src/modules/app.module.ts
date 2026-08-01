@@ -34,6 +34,8 @@ import { McpService } from "./mcp.service.js";
 import { SpeechIoService } from "./speech-io.service.js";
 import { ArtifactService } from "./artifact.service.js";
 import { WebService } from "./web.service.js";
+import { AgentRunsController } from "./agent-runs.controller.js";
+import { AgentRunsService } from "./agent-runs.service.js";
 
 @Module({
   controllers: [
@@ -49,7 +51,8 @@ import { WebService } from "./web.service.js";
     WorkflowsController,
     VoiceController,
     CapabilityAuditController,
-    McpController
+    McpController,
+    AgentRunsController
   ],
   providers: [
     LocalJsonStore,
@@ -73,7 +76,8 @@ import { WebService } from "./web.service.js";
     WebService,
     SpeechIoService,
     VoiceAuditService,
-    VoiceService
+    VoiceService,
+    AgentRunsService
   ]
 })
 export class AppModule {}

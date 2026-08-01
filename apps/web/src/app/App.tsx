@@ -16,6 +16,7 @@ const WorkflowReview = lazy(() => import("@/components/app/panels/WorkflowReview
 const MemoryReview = lazy(() => import("@/components/app/panels/MemoryReview").then((module) => ({ default: module.MemoryReview })));
 const ApprovalReview = lazy(() => import("@/components/app/panels/ApprovalReview").then((module) => ({ default: module.ApprovalReview })));
 const McpServers = lazy(() => import("@/components/app/panels/McpServers").then((module) => ({ default: module.McpServers })));
+const AgentRuns = lazy(() => import("@/components/app/panels/AgentRuns").then((module) => ({ default: module.AgentRuns })));
 
 export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -76,7 +77,46 @@ function Logo({ collapsed = false }: { collapsed?: boolean }) {
   );
 }
 
+function ThreadListEntry({ groupLabel }: { groupLabel?: string }) {
+  return (
+    <>
+      {groupLabel && <h2 className="mx-2 mt-5 mb-1 text-xs font-semibold text-muted-foreground first:mt-6">{groupLabel}</h2>}
+      <ThreadListItemPrimitive.Root className="min-w-0">
+        <div className="group/thread-item grid min-w-0 grid-cols-[minmax(0,1fr)_30px] items-center rounded-lg hover:bg-accent focus-within:bg-accent has-[[data-active]]:bg-accent has-[[aria-current=true]]:bg-accent">
+          <ThreadListItemPrimitive.Trigger className="block min-h-8 w-full cursor-pointer overflow-hidden truncate rounded-lg bg-transparent px-2.5 py-2 text-left text-sm text-foreground">
+            <ThreadListItemPrimitive.Title fallback="New Chat" />
+          </ThreadListItemPrimitive.Trigger>
+          <DropdownMenu>
+            <DropdownMenuTrigger className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover/thread-item:opacity-100 data-popup-open:opacity-100" title="Thread actions" aria-label="Thread actions" data-testid="thread-actions-button">
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-36">
+              <ThreadListItemPrimitive.Archive
+                render={
+                  <DropdownMenuItem data-testid="thread-archive-action">
+                    <Archive className="size-3.5" />
+                    <span>Archive</span>
+                  </DropdownMenuItem>
+                }
+              />
+              <ThreadListItemPrimitive.Delete
+                render={
+                  <DropdownMenuItem variant="destructive" data-testid="thread-delete-action">
+                    <Trash2 className="size-3.5" />
+                    <span>Delete</span>
+                  </DropdownMenuItem>
+                }
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </ThreadListItemPrimitive.Root>
+    </>
+  );
+}
+
 function ThreadListContent({ collapsed = false }: { collapsed?: boolean }) {
+  const threadItems = useAuiState((state) => state.threads.threadItems);
   return (
     <ThreadListPrimitive.Root className={cn("flex min-h-0 flex-1 flex-col px-3 py-2", collapsed && "items-center px-2")}>
       <Tooltip>
@@ -96,45 +136,35 @@ function ThreadListContent({ collapsed = false }: { collapsed?: boolean }) {
         </TooltipTrigger>
         {collapsed && <TooltipContent side="right">New Thread</TooltipContent>}
       </Tooltip>
-      {!collapsed && <div className="mx-2 mt-6 mb-2 text-xs font-semibold text-muted-foreground">Today</div>}
       <div className={cn("grid min-h-0 content-start gap-1 overflow-auto", collapsed && "hidden")} data-testid="thread-list">
         <ThreadListPrimitive.Items>
-          {() => (
-            <ThreadListItemPrimitive.Root className="min-w-0">
-              <div className="group/thread-item grid min-w-0 grid-cols-[minmax(0,1fr)_30px] items-center rounded-lg hover:bg-accent focus-within:bg-accent has-[[data-active]]:bg-accent has-[[aria-current=true]]:bg-accent">
-                <ThreadListItemPrimitive.Trigger className="block min-h-8 w-full cursor-pointer overflow-hidden truncate rounded-lg bg-transparent px-2.5 py-2 text-left text-sm text-foreground">
-                  <ThreadListItemPrimitive.Title fallback="New Chat" />
-                </ThreadListItemPrimitive.Trigger>
-                <DropdownMenu>
-                  <DropdownMenuTrigger className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition hover:bg-muted hover:text-foreground group-hover/thread-item:opacity-100 data-popup-open:opacity-100" title="Thread actions" aria-label="Thread actions" data-testid="thread-actions-button">
-                    <MoreHorizontal className="size-4" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-36">
-                    <ThreadListItemPrimitive.Archive
-                      render={
-                        <DropdownMenuItem data-testid="thread-archive-action">
-                          <Archive className="size-3.5" />
-                          <span>Archive</span>
-                        </DropdownMenuItem>
-                      }
-                    />
-                    <ThreadListItemPrimitive.Delete
-                      render={
-                        <DropdownMenuItem variant="destructive" data-testid="thread-delete-action">
-                          <Trash2 className="size-3.5" />
-                          <span>Delete</span>
-                        </DropdownMenuItem>
-                      }
-                    />
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-            </ThreadListItemPrimitive.Root>
-          )}
+          {({ threadListItem }) => {
+            const index = threadItems.findIndex((item) => item.id === threadListItem.id);
+            const groupLabel = threadGroupLabel(threadListItem.lastMessageAt);
+            const previousGroupLabel = index > 0 ? threadGroupLabel(threadItems[index - 1]?.lastMessageAt) : undefined;
+            return <ThreadListEntry groupLabel={groupLabel === previousGroupLabel ? undefined : groupLabel} />;
+          }}
         </ThreadListPrimitive.Items>
       </div>
     </ThreadListPrimitive.Root>
   );
+}
+
+function threadGroupLabel(lastMessageAt: Date | undefined) {
+  const now = new Date();
+  const today = startOfDay(now);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  if (!lastMessageAt || Number.isNaN(lastMessageAt.getTime()) || lastMessageAt < sevenDaysAgo) return "Older";
+  if (lastMessageAt >= today) return "Today";
+  if (lastMessageAt >= yesterday) return "Yesterday";
+  return "Previous 7 days";
+}
+
+function startOfDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 }
 
 function AssistantThreadSidebar({ collapsed }: { collapsed: boolean }) {
@@ -198,6 +228,7 @@ function ChatHeader({
           <MemoryReview />
           <ApprovalReview />
           <McpServers />
+          <AgentRuns />
         </Suspense>
         <TooltipIconButton tooltip="Share" className="text-muted-foreground" disabled>
           <Share className="size-4.5" />

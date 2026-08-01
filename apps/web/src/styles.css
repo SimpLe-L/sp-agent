@@ -95,6 +95,96 @@ p {
   margin: 0;
 }
 
+.agentMarkdown {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.agentMarkdown > :first-child {
+  margin-top: 0;
+}
+
+.agentMarkdown p,
+.agentMarkdown li {
+  overflow-wrap: anywhere;
+}
+
+.agentMarkdownH1,
+.agentMarkdownH2,
+.agentMarkdownH3 {
+  color: var(--foreground);
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.agentMarkdownH1 { font-size: 1.25rem; }
+.agentMarkdownH2 { font-size: 1.1rem; }
+.agentMarkdownH3 { font-size: 1rem; }
+
+.agentMarkdown ul,
+.agentMarkdown ol {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.35rem;
+}
+
+.agentMarkdown blockquote {
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  margin: 0;
+  padding-left: 0.85rem;
+}
+
+.agentMarkdown code {
+  background: var(--muted);
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+  padding: 0.1rem 0.28rem;
+}
+
+.agentMarkdown pre {
+  background: color-mix(in oklab, var(--muted) 74%, var(--background));
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.85rem 1rem;
+}
+
+.agentMarkdown pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.agentMarkdown a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, currentColor 35%, transparent);
+  text-underline-offset: 0.16em;
+}
+
+.agentMarkdownTableWrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.agentMarkdown table {
+  border-collapse: collapse;
+  font-size: 0.92em;
+  width: 100%;
+}
+
+.agentMarkdown th,
+.agentMarkdown td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.45rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.agentMarkdown th { font-weight: 600; }
+
 [data-slot="dropdown-menu-content"],
 [data-slot="dropdown-menu-sub-content"] {
   position: relative;
@@ -273,66 +363,128 @@ p {
 }
 
 .voiceCallBackdrop {
-  align-items: center;
-  background: rgb(20 20 18 / 28%);
-  display: flex;
   inset: 0;
-  justify-content: center;
-  padding: 24px;
+  pointer-events: none;
   position: fixed;
   z-index: 90;
 }
 
 .voiceCallPanel {
-  background: #1f201e;
-  border: 1px solid rgb(255 255 255 / 10%);
-  border-radius: 18px;
-  box-shadow: 0 28px 80px rgb(0 0 0 / 30%);
-  color: #f7f7f4;
+  background: #101616;
+  border: 1px solid rgb(106 255 223 / 28%);
+  border-radius: 8px;
+  bottom: 28px;
+  box-shadow: 0 22px 55px rgb(0 0 0 / 30%), 0 0 0 1px rgb(0 0 0 / 30%), inset 0 1px 0 rgb(255 255 255 / 5%);
+  color: #e9fffb;
   display: grid;
   grid-template-rows: auto 1fr;
-  max-height: min(560px, calc(100vh - 48px));
-  min-height: 520px;
+  max-height: min(430px, calc(100vh - 24px));
+  min-height: 390px;
   overflow: hidden;
-  width: min(360px, calc(100vw - 48px));
+  pointer-events: auto;
+  position: fixed;
+  right: 28px;
+  transition: box-shadow 180ms ease, border-color 180ms ease;
+  width: min(342px, calc(100vw - 24px));
+}
+
+.voiceCallPanel::before {
+  background-image: linear-gradient(rgb(109 255 220 / 6%) 1px, transparent 1px), linear-gradient(90deg, rgb(109 255 220 / 6%) 1px, transparent 1px);
+  background-size: 22px 22px;
+  content: "";
+  inset: 44px 0 0;
+  opacity: 0.55;
+  pointer-events: none;
+  position: absolute;
+}
+
+.voiceCallPanel.dragging {
+  border-color: rgb(109 255 220 / 68%);
+  box-shadow: 0 26px 62px rgb(0 0 0 / 42%), 0 0 28px rgb(61 235 196 / 18%);
+  transition: none;
 }
 
 .voiceCallHeader {
   align-items: center;
+  border-bottom: 1px solid rgb(121 255 225 / 12%);
+  cursor: grab;
   display: flex;
-  justify-content: flex-end;
-  padding: 14px 14px 0;
+  height: 44px;
+  justify-content: space-between;
+  padding: 0 9px 0 14px;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  z-index: 1;
+}
+
+.voiceCallHeader:active {
+  cursor: grabbing;
+}
+
+.voiceCallIdentity {
+  align-items: center;
+  color: #85f5d7;
+  display: inline-flex;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  gap: 6px;
+  letter-spacing: 0;
+}
+
+.voiceCallIdentity svg {
+  animation: voiceSignal 1800ms ease-in-out infinite;
+}
+
+.voiceCallDragHandle {
+  color: rgb(184 255 237 / 55%);
+  left: 50%;
+  line-height: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 13px;
+  transform: translateX(-50%);
 }
 
 .voiceCallClose {
-  color: #d9dad4;
+  color: #b6cbc5;
+  position: relative;
+  z-index: 1;
+}
+
+.voiceCallClose:hover {
+  background: rgb(118 255 221 / 12%);
+  color: #eafff9;
 }
 
 .voiceCallBody {
   align-items: center;
   display: grid;
-  gap: 22px;
+  gap: 18px;
   justify-content: center;
   min-height: 0;
   overflow: hidden;
-  padding: 28px 22px 88px;
+  padding: 32px 22px 42px;
+  position: relative;
   text-align: center;
+  z-index: 1;
 }
 
 .voiceAvatar {
   align-items: center;
   appearance: none;
-  background: linear-gradient(145deg, #4b514b, #292b28);
-  border: 1px solid rgb(255 255 255 / 14%);
+  background: #172524;
+  border: 1px solid rgb(136 255 225 / 36%);
   border-radius: 999px;
-  box-shadow: inset 0 0 0 8px rgb(255 255 255 / 4%);
+  box-shadow: inset 0 0 0 8px rgb(68 224 186 / 6%), 0 0 0 10px rgb(93 255 217 / 4%);
   display: inline-flex;
-  height: 138px;
+  height: 128px;
   justify-content: center;
   justify-self: center;
   padding: 0;
   position: relative;
-  width: 138px;
+  transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  width: 128px;
 }
 
 .voiceAvatar:disabled {
@@ -345,15 +497,15 @@ p {
 }
 
 .voiceAvatar svg {
-  color: #f4f5ef;
+  color: #baffeb;
   position: relative;
   z-index: 1;
 }
 
 .voiceAvatar span {
-  border: 2px solid rgb(255 255 255 / 24%);
+  border: 1px solid rgb(116 255 219 / 68%);
   border-radius: inherit;
-  inset: -14px;
+  inset: -16px;
   opacity: 0;
   position: absolute;
 }
@@ -365,14 +517,17 @@ p {
 }
 
 .voiceAvatar.speaking {
-  background: linear-gradient(145deg, #5f6b5e, #30372f);
+  background: #1d302d;
+  border-color: rgb(178 255 231 / 76%);
+  box-shadow: inset 0 0 0 8px rgb(98 255 213 / 8%), 0 0 30px rgb(73 244 199 / 18%);
 }
 
 .voiceCallStatus {
-  color: #f4f5ef;
-  font-size: 15px;
-  font-weight: 650;
+  color: #eafff8;
+  font-size: 16px;
+  font-weight: 600;
   line-height: 1.4;
+  letter-spacing: 0;
   margin: 0;
   max-width: 280px;
   overflow-wrap: anywhere;
@@ -409,6 +564,17 @@ p {
   }
 }
 
+@keyframes voiceSignal {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .thinkingGlyph span {
   animation: thinkingDotPulse 950ms ease-in-out infinite;
 }
@@ -428,7 +594,8 @@ p {
 @media (prefers-reduced-motion: reduce) {
 
   .thinkingGlyph span,
-  .voiceAvatar span {
+  .voiceAvatar span,
+  .voiceCallIdentity svg {
     animation: none;
     opacity: 0.55;
     transform: none;
@@ -441,14 +608,13 @@ p {
   }
 
   .voiceCallBackdrop {
-    align-items: flex-end;
-    padding: 12px;
+    pointer-events: none;
   }
 
   .voiceCallPanel {
-    border-radius: 18px;
-    max-height: calc(100vh - 24px);
-    min-height: min(560px, calc(100vh - 24px));
-    width: 100%;
+    bottom: 12px;
+    max-height: min(430px, calc(100vh - 24px));
+    min-height: 390px;
+    right: 12px;
   }
 }

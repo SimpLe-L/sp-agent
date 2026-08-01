@@ -93,6 +93,38 @@ export type VoiceChatResponse = {
   };
 };
 
+export type AgentRunEvent = {
+  id: string;
+  kind: "run_started" | "context_compiled" | "tool_requested" | "tool_completed" | "runtime_completed" | "run_completed" | "run_failed";
+  timestamp: string;
+  data: Record<string, unknown>;
+};
+
+export type AgentRun = {
+  id: string;
+  sessionId: string;
+  runtimeId: string;
+  status: "running" | "completed" | "degraded" | "failed";
+  context: {
+    messageChars: number;
+    conversationMessageCount: number;
+    conversationChars: number;
+    memoryCount: number;
+    memoryIds: string[];
+    extensionCount: number;
+    capabilityCount: number;
+    visibleExtensionIds: string[];
+    activeSkillIds: string[];
+  };
+  provider?: string;
+  model?: string;
+  degradedReason?: string;
+  startedAt: string;
+  completedAt?: string;
+  updatedAt: string;
+  events: AgentRunEvent[];
+};
+
 
 
 export type ThreadRecord = {

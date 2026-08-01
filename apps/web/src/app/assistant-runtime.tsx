@@ -10,7 +10,7 @@ import {
   type ThreadHistoryAdapter,
   type ThreadMessage
 } from "@assistant-ui/react";
-import { apiBase, fetchJson } from "./api";
+import { apiBase, apiHeaders, fetchJson } from "./api";
 import { pendingVoiceResponses } from "./voice-cache";
 import type { AgentStreamEvent, ThreadRecord } from "./types";
 
@@ -90,6 +90,19 @@ function toThreadMetadata(thread: ThreadRecord) {
   };
 }
 
+const sessionCache = new Map<string, ThreadRecord>();
+
+function cacheSession(session: ThreadRecord) {
+  sessionCache.set(session.id, session);
+  return session;
+}
+
+async function loadSession(sessionId: string) {
+  const cached = sessionCache.get(sessionId);
+  if (cached?.messages) return cached;
+  return cacheSession(await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${sessionId}`));
+}
+
 function toAssistantThreadMessage(message: NonNullable<ThreadRecord["messages"]>[number], index: number) {
   if (message.role !== "user" && message.role !== "assistant" && message.role !== "system") return null;
   return fromThreadMessageLike(
@@ -153,8 +166,7 @@ function ThreadHistoryProvider({ children }: { children?: React.ReactNode }) {
       async load() {
         const { remoteId } = aui.threadListItem().getState();
         if (!remoteId) return { messages: [] };
-        const session = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${remoteId}`).catch(() => undefined);
-        if (!session) return { messages: [] };
+        const session = await loadSession(remoteId);
         const messages = (session.messages ?? [])
           .map(toAssistantThreadMessage)
           .filter((message): message is ThreadMessage => Boolean(message));
@@ -204,7 +216,7 @@ const assistantThreadListAdapter: RemoteThreadListAdapter = {
     });
   },
   async fetch(threadId) {
-    const thread = await fetchJson<ThreadRecord>(`${apiBase}/chat/sessions/${threadId}`);
+    const thread = await loadSession(threadId);
     return toThreadMetadata(thread);
   },
   async generateTitle(remoteId, messages) {
@@ -237,7 +249,7 @@ export function useAgentAssistantRuntime() {
 
         const res = await fetch(`${apiBase}/agent/messages/stream`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: await apiHeaders({ "content-type": "application/json" }),
           body: JSON.stringify({ content, sessionId: apiSessionId }),
           signal: abortSignal
         });

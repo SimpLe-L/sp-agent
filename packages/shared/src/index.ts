@@ -696,7 +696,11 @@ export type InvokeExtensionInput = z.infer<typeof invokeExtensionSchema>;
 
 export const workspacePathSchema = z.string().min(1).max(4_000);
 export const workspaceListSchema = z.object({ path: workspacePathSchema.default("."), depth: z.coerce.number().int().min(0).max(8).default(2), limit: z.coerce.number().int().positive().max(1_000).default(200) });
-export const workspaceReadFileSchema = z.object({ path: workspacePathSchema, maxBytes: z.coerce.number().int().positive().max(1_000_000).default(200_000) });
+export const workspaceReadFileSchema = z.object({
+  path: workspacePathSchema,
+  offsetBytes: z.coerce.number().int().min(0).max(1_000_000_000).default(0),
+  maxBytes: z.coerce.number().int().positive().max(1_000_000).default(200_000)
+});
 export const workspaceSearchSchema = z.object({ query: z.string().min(1).max(500), path: workspacePathSchema.default("."), maxResults: z.coerce.number().int().positive().max(200).default(50) });
 export const workspaceWriteFileSchema = z.object({ path: workspacePathSchema, content: z.string().max(2_000_000), createOnly: z.coerce.boolean().default(false) });
 export const workspaceApplyPatchSchema = z.object({ patch: z.string().min(1).max(2_000_000), cwd: workspacePathSchema.default(".") });
@@ -858,6 +862,7 @@ export type AgentArtifact = z.infer<typeof agentArtifactSchema>;
 
 export const agentMessageResponseSchema = z.object({
   sessionId: z.string(),
+  runId: z.string().optional(),
   role: z.literal("assistant"),
   content: z.string(),
   provider: z.string(),
@@ -869,3 +874,42 @@ export const agentMessageResponseSchema = z.object({
   artifacts: z.array(agentArtifactSchema).default([])
 });
 export type AgentMessageResponse = z.infer<typeof agentMessageResponseSchema>;
+
+export const agentRunContextManifestSchema = z.object({
+  messageChars: z.number().int().nonnegative(),
+  conversationMessageCount: z.number().int().nonnegative(),
+  conversationChars: z.number().int().nonnegative(),
+  memoryCount: z.number().int().nonnegative(),
+  memoryIds: z.array(z.string()).default([]),
+  extensionCount: z.number().int().nonnegative(),
+  capabilityCount: z.number().int().nonnegative(),
+  visibleExtensionIds: z.array(z.string()).default([]),
+  activeSkillIds: z.array(z.string()).default([])
+});
+export type AgentRunContextManifest = z.infer<typeof agentRunContextManifestSchema>;
+
+export const agentRunEventSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["run_started", "context_compiled", "tool_requested", "tool_completed", "runtime_completed", "run_completed", "run_failed"]),
+  timestamp: z.string(),
+  data: z.record(z.unknown()).default({})
+});
+export type AgentRunEvent = z.infer<typeof agentRunEventSchema>;
+
+export type AgentRunStatus = "running" | "completed" | "degraded" | "failed";
+
+export const agentRunSchema = z.object({
+  id: z.string(),
+  sessionId: z.string(),
+  runtimeId: z.string(),
+  status: z.enum(["running", "completed", "degraded", "failed"]),
+  context: agentRunContextManifestSchema,
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  degradedReason: z.string().optional(),
+  startedAt: z.string(),
+  completedAt: z.string().optional(),
+  updatedAt: z.string(),
+  events: z.array(agentRunEventSchema).default([])
+});
+export type AgentRun = z.infer<typeof agentRunSchema>;

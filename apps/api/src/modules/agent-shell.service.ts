@@ -12,6 +12,7 @@ import { ChatService } from "./chat.service.js";
 import { ExtensionsService } from "./extensions.service.js";
 import { LocalSkillsService } from "./local-skills.service.js";
 import { MemoryService } from "./memory.service.js";
+import { AgentRunsService } from "./agent-runs.service.js";
 
 @Injectable()
 export class AgentShellService {
@@ -19,7 +20,8 @@ export class AgentShellService {
     @Inject(ExtensionsService) private readonly extensionsService: ExtensionsService,
     @Inject(LocalSkillsService) private readonly localSkillsService: LocalSkillsService,
     @Inject(ChatService) private readonly chatService: ChatService,
-    @Inject(MemoryService) private readonly memoryService: MemoryService
+    @Inject(MemoryService) private readonly memoryService: MemoryService,
+    @Inject(AgentRunsService) private readonly agentRunsService: AgentRunsService
   ) {}
 
   async getStatus(): Promise<AgentShellStatus> {
@@ -43,11 +45,19 @@ export class AgentShellService {
 
   async runMessage(input: CreateAgentMessageInput, metadata: Record<string, unknown> = { source: "agent.messages" }): Promise<AgentMessageResponse> {
     const prepared = await this.prepareTurn(input, metadata);
-    const result = await runPersonalAgentTurnWithAgent(prepared.turnInput);
-    await this.persistAssistantMessage(prepared.sessionId, result, prepared.memoryContext, metadata);
+    let result: PersonalAgentTurnResult;
+    try {
+      result = await runPersonalAgentTurnWithAgent(prepared.turnInput);
+    } catch (error) {
+      await this.agentRunsService.finish(prepared.runId, { status: "failed", provider: process.env.AGENT_RUNTIME_PROVIDER ?? "pi", degradedReason: error instanceof Error ? error.message : "Agent runtime failed.", toolCallCount: 0, artifactCount: 0 });
+      throw error;
+    }
+    await this.persistAssistantMessage(prepared.sessionId, result, prepared.memoryContext, metadata, prepared.runId);
+    await this.finishRun(prepared.runId, result);
 
     return {
       sessionId: prepared.sessionId,
+      runId: prepared.runId,
       role: "assistant",
       content: result.content,
       provider: result.provider,
@@ -65,30 +75,38 @@ export class AgentShellService {
     yield {
       type: "metadata",
       sessionId: prepared.sessionId,
+      runId: prepared.runId,
       memoryContextCount: prepared.memoryContext.length
     };
-    for await (const event of streamPersonalAgentTurnWithAgent(prepared.turnInput)) {
-      if (event.type === "text_delta") {
-        yield event;
-        continue;
-      }
-      await this.persistAssistantMessage(prepared.sessionId, event.result, prepared.memoryContext, metadata);
-      yield {
-        type: "done",
-        sessionId: prepared.sessionId,
-        result: {
-          sessionId: prepared.sessionId,
-          role: "assistant",
-          content: event.result.content,
-          provider: event.result.provider,
-          model: event.result.model,
-          degradedReason: event.result.degradedReason,
-          memoryContext: prepared.memoryContext,
-          activeTools: event.result.activeTools ?? [],
-          toolCalls: event.result.toolCalls ?? [],
-          artifacts: event.result.artifacts ?? []
+    try {
+      for await (const event of streamPersonalAgentTurnWithAgent(prepared.turnInput)) {
+        if (event.type === "text_delta") {
+          yield event;
+          continue;
         }
-      };
+        await this.persistAssistantMessage(prepared.sessionId, event.result, prepared.memoryContext, metadata, prepared.runId);
+        await this.finishRun(prepared.runId, event.result);
+        yield {
+          type: "done",
+          sessionId: prepared.sessionId,
+          result: {
+            sessionId: prepared.sessionId,
+            runId: prepared.runId,
+            role: "assistant",
+            content: event.result.content,
+            provider: event.result.provider,
+            model: event.result.model,
+            degradedReason: event.result.degradedReason,
+            memoryContext: prepared.memoryContext,
+            activeTools: event.result.activeTools ?? [],
+            toolCalls: event.result.toolCalls ?? [],
+            artifacts: event.result.artifacts ?? []
+          }
+        };
+      }
+    } catch (error) {
+      await this.agentRunsService.finish(prepared.runId, { status: "failed", provider: process.env.AGENT_RUNTIME_PROVIDER ?? "pi", degradedReason: error instanceof Error ? error.message : "Agent stream failed.", toolCallCount: 0, artifactCount: 0 });
+      throw error;
     }
   }
 
@@ -127,6 +145,22 @@ export class AgentShellService {
     // This grant is fixed for the whole turn. Later Skill selection narrows it;
     // it can never make an undisclosed capability available.
     const turnGrant = createTurnCapabilityGrant(agentVisibleExtensions, localSkills);
+    const runtimeId = process.env.AGENT_RUNTIME_PROVIDER ?? "pi";
+    const run = await this.agentRunsService.start({
+      sessionId: session.id,
+      runtimeId,
+      context: {
+        messageChars: input.content.length,
+        conversationMessageCount: conversationHistory.length,
+        conversationChars: conversationHistory.reduce((total, message) => total + message.content.length, 0),
+        memoryCount: memoryContext.length,
+        memoryIds: memoryContext.map((memory) => memory.entry.id),
+        extensionCount: agentVisibleExtensions.length,
+        capabilityCount: agentVisibleExtensions.reduce((total, extension) => total + extension.capabilities.length, 0),
+        visibleExtensionIds: agentVisibleExtensions.map((extension) => extension.id),
+        activeSkillIds: localSkills.filter((skill) => skill.status === "active").map((skill) => skill.id)
+      }
+    });
     const turnInput: PersonalAgentTurnInput = {
       message: input.content,
       sessionId: session.id,
@@ -135,25 +169,45 @@ export class AgentShellService {
       extensionManifests: agentVisibleExtensions,
       safetyModel: extensionStatus.safetyModel,
       extensionInvoker: async (request) => {
+        const skillId = request.extensionId.startsWith("local.skill.") ? request.extensionId.slice("local.skill.".length) : undefined;
+        await this.agentRunsService.record(run.id, "tool_requested", {
+          extensionId: request.extensionId,
+          capabilityId: request.capabilityId,
+          skillId,
+          inputKeys: Object.keys(request.input).sort()
+        });
         const requestedTool = `${request.extensionId}.${request.capabilityId}`;
         if (!turnGrant.visible.has(requestedTool)) {
-          return { ok: false, status: "denied", degradedReason: "This capability was not granted for the current agent turn." };
+          const response = { ok: false, status: "denied", degradedReason: "This capability was not granted for the current agent turn." };
+          await this.agentRunsService.record(run.id, "tool_completed", { extensionId: request.extensionId, capabilityId: request.capabilityId, status: response.status, degradedReason: response.degradedReason });
+          return response;
         }
+        let response;
         if (request.extensionId.startsWith("local.skill.")) {
-          const skillId = request.extensionId.slice("local.skill.".length);
-          if (!turnGrant.skills.has(skillId)) return { ok: false, status: "denied", degradedReason: "This Skill was not granted for the current agent turn." };
-          const target = turnGrant.skills.get(skillId)?.targets.get(request.capabilityId);
-          if (target) {
-            return this.invokeAgentExtension(
-              { extensionId: target.extensionId, capabilityId: target.capabilityId, input: request.input },
-              { sessionId: session.id, runtimeId: process.env.AGENT_RUNTIME_PROVIDER ?? "pi", skillId }
-            );
+          if (!turnGrant.skills.has(skillId!)) {
+            response = { ok: false, status: "denied", degradedReason: "This Skill was not granted for the current agent turn." };
+          } else {
+            const target = turnGrant.skills.get(skillId!)?.targets.get(request.capabilityId);
+            if (target) {
+              response = await this.invokeAgentExtension(
+                { extensionId: target.extensionId, capabilityId: target.capabilityId, input: request.input },
+                { sessionId: session.id, runtimeId, skillId }
+              );
+            }
           }
         }
-        return this.invokeAgentExtension(request, { sessionId: session.id, runtimeId: process.env.AGENT_RUNTIME_PROVIDER ?? "pi" });
+        response ??= await this.invokeAgentExtension(request, { sessionId: session.id, runtimeId, skillId });
+        await this.agentRunsService.record(run.id, "tool_completed", {
+          extensionId: request.extensionId,
+          capabilityId: request.capabilityId,
+          status: response.status,
+          permissionMode: response.permissionAudit?.mode,
+          degradedReason: response.degradedReason
+        });
+        return response;
       }
     };
-    return { sessionId: session.id, memoryContext, turnInput };
+    return { sessionId: session.id, runId: run.id, memoryContext, turnInput };
   }
 
   private async invokeAgentExtension(request: PersonalAgentExtensionInvokeRequest, context: { sessionId: string; runtimeId: string; skillId?: string }) {
@@ -205,12 +259,13 @@ export class AgentShellService {
     }
   }
 
-  private async persistAssistantMessage(sessionId: string, result: PersonalAgentTurnResult, memoryContext: MemorySearchResult[], metadata: Record<string, unknown>) {
+  private async persistAssistantMessage(sessionId: string, result: PersonalAgentTurnResult, memoryContext: MemorySearchResult[], metadata: Record<string, unknown>, runId: string) {
     await this.chatService.createMessage(sessionId, {
       role: "assistant",
       content: result.content,
       metadata: {
         ...metadata,
+        runId,
         provider: result.provider,
         model: result.model,
         degradedReason: result.degradedReason,
@@ -220,6 +275,17 @@ export class AgentShellService {
         toolCalls: result.toolCalls ?? [],
         artifacts: result.artifacts ?? []
       }
+    });
+  }
+
+  private async finishRun(runId: string, result: PersonalAgentTurnResult) {
+    await this.agentRunsService.finish(runId, {
+      status: result.degradedReason ? "degraded" : "completed",
+      provider: result.provider,
+      model: result.model,
+      degradedReason: result.degradedReason,
+      toolCallCount: result.toolCalls?.length ?? 0,
+      artifactCount: result.artifacts?.length ?? 0
     });
   }
 }

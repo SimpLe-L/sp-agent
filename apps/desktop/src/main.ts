@@ -89,7 +89,9 @@ async function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: resolve(__dirname, "preload.js")
+      // Electron's sandboxed preload runner loads CommonJS. Keep this as a
+      // .cjs output even though the desktop main process is ESM.
+      preload: resolve(__dirname, "preload.cjs")
     }
   });
 

@@ -273,7 +273,7 @@ async function getPiAgentRuntimeStatus(env: NodeJS.ProcessEnv = process.env): Pr
     const apiKey = piApiKey(provider, env);
     if (apiKey) authStorage.setRuntimeApiKey(provider, apiKey);
     const modelRegistry = pi.ModelRegistry.inMemory(authStorage);
-    registerSiliconFlowPiProvider(modelRegistry, env);
+    registerPiProviders(modelRegistry, env);
     const selectedModel = modelRegistry.find(provider, modelId);
     const availableModelCount = modelRegistry.getAvailable().length;
 
@@ -285,7 +285,7 @@ async function getPiAgentRuntimeStatus(env: NodeJS.ProcessEnv = process.env): Pr
         sdkLoaded: true,
         selectedModelAvailable: Boolean(selectedModel),
         availableModelCount,
-        degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`
+        degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires an API key for the configured Pi model provider (${provider}).`
       };
     }
 
@@ -334,7 +334,7 @@ async function runPiPersonalAgentTurn(
         "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
       provider: "pi",
       model: modelLabel,
-      degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`,
+      degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires an API key for the configured Pi model provider (${provider}).`,
       activeTools: createPiAgentShellTools(input).map((tool) => tool.name),
       toolCalls: []
     };
@@ -444,7 +444,7 @@ async function* streamPiPersonalAgentTurn(
       content: "本地个人 agent 基座已启动。当前缺少 Pi 模型密钥，所以这次使用确定性降级回复；你仍然可以继续搭建 memory、speech 和 skills 边界。",
       provider: "pi",
       model: modelLabel,
-      degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires SILICONFLOW_API_KEY for the configured Pi model provider (${provider}).`,
+      degradedReason: `AGENT_RUNTIME_PROVIDER=pi requires an API key for the configured Pi model provider (${provider}).`,
       activeTools: createPiAgentShellTools(input).map((tool) => tool.name),
       toolCalls: []
     };
@@ -497,7 +497,6 @@ async function* streamPiPersonalAgentTurn(
         const delta = extractPiStreamingTextDelta(event);
         if (delta) {
           chunks.push(delta);
-          queue.push({ type: "text_delta", text: delta });
         }
         const finalText = extractPiFinalAssistantText(event);
         if (finalText) finalAssistantText = finalText;
@@ -517,9 +516,6 @@ async function* streamPiPersonalAgentTurn(
       );
       finalMessages = session.state?.messages ?? session.messages;
       const content = sanitizeVisibleAgentContent((chunks.join("").trim() || finalAssistantText || extractLastAssistantText(finalMessages) || "").trim());
-      if (!chunks.join("").trim() && content) {
-        for (const text of chunkText(content)) queue.push({ type: "text_delta", text });
-      }
       const result: PersonalAgentTurnResult = content
         ? {
             content,
@@ -539,7 +535,7 @@ async function* streamPiPersonalAgentTurn(
             toolCalls,
             artifacts
           };
-      if (!content) queue.push({ type: "text_delta", text: result.content });
+      for (const text of chunkText(result.content)) queue.push({ type: "text_delta", text });
       queue.push({ type: "done", result });
     } catch (error) {
       const result: PersonalAgentTurnResult = {
@@ -568,7 +564,7 @@ async function createPiModelContext(env: NodeJS.ProcessEnv, provider: string, mo
   const apiKey = piApiKey(provider, env);
   if (apiKey) authStorage.setRuntimeApiKey(provider, apiKey);
   const modelRegistry = pi.ModelRegistry.inMemory(authStorage);
-  registerSiliconFlowPiProvider(modelRegistry, env);
+  registerPiProviders(modelRegistry, env);
   const model = modelRegistry.find(provider, modelId);
   return { pi, authStorage, modelRegistry, model };
 }
@@ -611,7 +607,8 @@ function createCapabilityTools(input: PersonalAgentTurnInput, artifacts: AgentAr
     description: capability.description,
     promptSnippet: `${capability.label}: ${capability.description}`,
     promptGuidelines: [
-      "Use this capability only when it materially grounds or completes the user's request.",
+      "Autonomously use this capability when it materially grounds or completes the user's request; do not wait for the user to name it.",
+      "For a current, live, or latest-data request that this capability can answer, invoke it before replying. Do not substitute remembered or estimated data.",
       "Supply a JSON object in inputJson that follows the documented input schema.",
       "Do not claim results that are absent from the capability response."
     ],
@@ -623,8 +620,9 @@ function createCapabilityTools(input: PersonalAgentTurnInput, artifacts: AgentAr
         return toolFailure({ ok: false, status: "denied", degradedReason: "The API shell did not provide an extension invoker." });
       }
       const result = await input.extensionInvoker({ extensionId: manifest.id, capabilityId: capability.id, input: extensionInput.value });
+      const maxResultChars = manifest.id === "local.workspace" && capability.id === "workspace.read_file" ? 12_000 : 1_200;
       return {
-        content: [{ type: "text", text: truncateJson(redactLargeExtensionResult(result), 12000) }],
+        content: [{ type: "text", text: truncateJson(redactLargeExtensionResult(result, maxResultChars), 16_000) }],
         details: { ok: result.ok, status: result.status, extensionId: manifest.id, capabilityId: capability.id }
       };
     }
@@ -659,19 +657,31 @@ function buildPiAgentShellPrompt(input: PersonalAgentTurnInput): string {
     description: capability.description,
     inputSchema: capability.inputSchema ?? "{}"
   }));
+  const mandatoryCapabilities = capabilities.filter((capability) => matchesLiveCapabilityRequest(input.message, capability));
   return JSON.stringify({
     instruction:
-      "You are the Pi runtime for a trusted local development agent. Reply in concise Chinese. Select an available Skill only when it materially helps the request; otherwise answer directly. For a local.skill capability, load its instructions before following it, then read package references only when needed. Treat declared API tools as the Skill's allowlist. Do not claim unavailable tool results, external data, or memory. Do not mention internal tools unless asked. Keep the response under 10 lines.",
+      "You are the Pi runtime for a trusted local development agent. Reply in concise Chinese and use clean Markdown: short headings when useful, bullet lists for parallel facts, and fenced code blocks for code. Do not expose planning, retries, tool parameters, truncation notes, or a step-by-step work log. Call tools silently, then provide the completed answer or a short, explicit limitation. Autonomously select and invoke an available capability whenever it materially grounds or completes the user's natural-language request; never require the user to name a Skill, MCP server, or tool. When mandatoryCapabilities is non-empty, you MUST invoke the matching capability before replying. It is a failure to answer that request from memory, estimation, or model knowledge. In particular, use an enabled MCP capability for live or external information it can provide, such as weather, search, or a configured service. Answer directly only when no capability materially helps. For a local.skill capability, load its instructions before following it, then read package references only when needed. Treat declared API tools as the Skill's allowlist. Do not claim unavailable tool results, external data, or memory. Do not mention internal tools unless asked.",
     userMessage: input.message,
     sessionId: input.sessionId,
     conversationHistory: (input.conversationHistory ?? []).slice(-12).map((message) => ({ role: message.role, content: message.content.slice(0, 2_000) })),
     memoryContext: (input.memoryContext ?? []).slice(0, 8),
     availableAppTools: ["inspect_extension_registry: read local extensions and safety policy only", ...capabilities.map((item) => `${item.toolName}: ${item.label}`)],
     availableCapabilities: capabilities,
+    mandatoryCapabilities,
     extensionInvocationPolicy:
       "Use only the capabilities exposed by the local API. Sensitive credentials, external account actions, and destructive operations remain approval-gated.",
     extensionCount: input.extensionManifests?.length ?? 0
   });
+}
+
+function matchesLiveCapabilityRequest(message: string, capability: { label: string; description: string }): boolean {
+  const request = message.toLowerCase();
+  const capabilityText = `${capability.label} ${capability.description}`.toLowerCase();
+  const asksForCurrentInformation = /今天|当前|现在|实时|最新|天气|气温|温度|下雨|降雨|晴天|weather|forecast|temperature|rain/u.test(request);
+  if (!asksForCurrentInformation) return false;
+  const weatherCapability = /weather|forecast|气象|天气/u.test(capabilityText);
+  const searchCapability = /web search|search public web|网络搜索|网页搜索/u.test(capabilityText);
+  return weatherCapability || (searchCapability && /最新|当前|现在|实时|news|新闻/u.test(request));
 }
 
 function parseOptionalJsonObject(inputJson: string | undefined): { ok: true; value: Record<string, unknown> } | { ok: false; status: "denied"; degradedReason: string } {
@@ -691,10 +701,10 @@ function parseOptionalJsonObject(inputJson: string | undefined): { ok: true; val
   }
 }
 
-function redactLargeExtensionResult(result: PersonalAgentExtensionInvokeResult): PersonalAgentExtensionInvokeResult {
+function redactLargeExtensionResult(result: PersonalAgentExtensionInvokeResult, maxStringChars = 1_200): PersonalAgentExtensionInvokeResult {
   return {
     ...result,
-    result: truncateDeepStrings(result.result, 1200)
+    result: truncateDeepStrings(result.result, maxStringChars)
   };
 }
 
@@ -811,15 +821,16 @@ function piRequestTimeoutMs(env: NodeJS.ProcessEnv): number {
 }
 
 function piModelProvider(env: NodeJS.ProcessEnv): string {
-  return env.PI_MODEL_PROVIDER || "siliconflow";
+  return env.PI_MODEL_PROVIDER || "deepseek";
 }
 
 function piModelId(env: NodeJS.ProcessEnv): string {
-  return env.PI_MODEL_ID || env.PI_SILICONFLOW_MODEL || "deepseek-ai/DeepSeek-V4-Flash";
+  return env.LLM_MODEL || env.PI_MODEL_ID || "deepseek-v4-flash";
 }
 
 function piApiKey(provider: string, env: NodeJS.ProcessEnv): string | undefined {
   if (provider.toLowerCase() === "siliconflow") return env.SILICONFLOW_API_KEY;
+  if (provider.toLowerCase() === "deepseek") return env.LLM_API_KEY;
   return undefined;
 }
 
@@ -827,7 +838,7 @@ function piHasApiKey(provider: string, env: NodeJS.ProcessEnv): boolean {
   return Boolean(piApiKey(provider, env));
 }
 
-function registerSiliconFlowPiProvider(modelRegistry: PiModelRegistry, env: NodeJS.ProcessEnv): void {
+function registerPiProviders(modelRegistry: PiModelRegistry, env: NodeJS.ProcessEnv): void {
   modelRegistry.registerProvider("siliconflow", {
     name: "SiliconFlow",
     baseUrl: env.SILICONFLOW_BASE_URL ?? "https://api.siliconflow.cn/v1",
@@ -843,6 +854,35 @@ function registerSiliconFlowPiProvider(modelRegistry: PiModelRegistry, env: Node
       {
         id: "deepseek-ai/DeepSeek-V4-Flash",
         name: "DeepSeek V4 Flash (SiliconFlow)",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 64000,
+        maxTokens: 2048,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0
+        }
+      }
+    ]
+  });
+
+  modelRegistry.registerProvider("deepseek", {
+    name: "DeepSeek",
+    baseUrl: env.LLM_BASE_URL ?? "https://api.deepseek.com",
+    apiKey: env.LLM_API_KEY || "$LLM_API_KEY",
+    api: "openai-completions",
+    authHeader: true,
+    compat: {
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: false,
+      maxTokensField: "max_tokens"
+    },
+    models: [
+      {
+        id: "deepseek-v4-flash",
+        name: "DeepSeek V4 Flash",
         reasoning: false,
         input: ["text"],
         contextWindow: 64000,

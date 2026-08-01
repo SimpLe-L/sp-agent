@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useAui, useAuiState } from "@assistant-ui/react";
-import { Bot, Mic, Upload, X } from "lucide-react";
+import { AudioLines, GripHorizontal, Mic, Radio, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiBase, fetchJson } from "@/app/api";
@@ -28,6 +28,20 @@ export function VoiceRecorderButton() {
   const lastVoiceAtRef = useRef(0);
   const recordingStartedAtRef = useRef(0);
   const heardVoiceRef = useRef(false);
+  const voiceCallPanelRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } | null>(null);
+  const [panelPosition, setPanelPosition] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,6 +154,11 @@ export function VoiceRecorderButton() {
         chunksRef.current = [];
         stopStream(streamRef.current);
         streamRef.current = null;
+        if (continuousCallRef.current && !heardVoiceRef.current) {
+          setMessage("Listening");
+          void startRecording({ autoStopOnSilence: true });
+          return;
+        }
         void sendVoiceBlob(blob);
       };
       recorder.start(250);
@@ -225,6 +244,45 @@ export function VoiceRecorderButton() {
     if (state !== "degraded") setState("idle");
   }
 
+  function startPanelDrag(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    const bounds = voiceCallPanelRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const margin = 12;
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: panelPosition.x,
+      originY: panelPosition.y,
+      minX: panelPosition.x + margin - bounds.left,
+      maxX: panelPosition.x + window.innerWidth - margin - bounds.right,
+      minY: panelPosition.y + margin - bounds.top,
+      maxY: panelPosition.y + window.innerHeight - margin - bounds.bottom
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragging(true);
+  }
+
+  function movePanel(event: React.PointerEvent<HTMLElement>) {
+    const drag = dragRef.current;
+    const panel = voiceCallPanelRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !panel) return;
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    setPanelPosition({
+      x: Math.min(Math.max(drag.originX + deltaX, drag.minX), drag.maxX),
+      y: Math.min(Math.max(drag.originY + deltaY, drag.minY), drag.maxY)
+    });
+  }
+
+  function endPanelDrag(event: React.PointerEvent<HTMLElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    setDragging(false);
+  }
+
   async function playAudio(audioBase64: string, mimeType: string) {
     if (!mimeType.startsWith("audio/")) return;
     setState("playing");
@@ -306,8 +364,18 @@ export function VoiceRecorderButton() {
       </Tooltip>
       {open && (
         <div className="voiceCallBackdrop" data-testid="voice-call-overlay" role="presentation">
-          <section className="voiceCallPanel" role="dialog" aria-modal="true" aria-label="Voice call" data-voice-state={state}>
-            <header className="voiceCallHeader">
+          <section
+            ref={voiceCallPanelRef}
+            className={cn("voiceCallPanel", dragging && "dragging")}
+            role="dialog"
+            aria-modal="false"
+            aria-label="Voice call"
+            data-voice-state={state}
+            style={{ transform: `translate3d(${panelPosition.x}px, ${panelPosition.y}px, 0)` }}
+          >
+            <header className="voiceCallHeader" onPointerDown={startPanelDrag} onPointerMove={movePanel} onPointerUp={endPanelDrag} onPointerCancel={endPanelDrag}>
+              <div className="voiceCallIdentity" aria-hidden="true"><Radio size={13} /><span>VOICE LINK</span></div>
+              <div className="voiceCallDragHandle" title="Drag to move"><GripHorizontal size={19} /></div>
               <Button variant="ghost" size="icon" className="voiceCallClose" onClick={closeCall} aria-label="Close voice call">
                 <X size={18} />
               </Button>
@@ -320,7 +388,7 @@ export function VoiceRecorderButton() {
                 onClick={continuousCall || state === "recording" ? stopContinuousCall : () => void startContinuousCall()}
                 aria-label={continuousCall || state === "recording" ? "Stop Call" : "Start Call"}
               >
-                <Bot size={42} />
+                <AudioLines size={44} />
                 <span aria-hidden="true" />
               </button>
               <p className="voiceCallStatus">{callStatus}</p>

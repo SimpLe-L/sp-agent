@@ -21,6 +21,22 @@ The API gateway is the local capability host and control plane, not a per-action
 
 The desktop shell generates a bearer token for its API child process. The API binds only to `127.0.0.1`, restricts CORS to the renderer origin when supplied, and rejects unauthenticated requests in desktop mode.
 
+## Agent Run Harness
+
+Each chat turn is an API-owned `AgentRun`, rather than an opaque model request. After the API compiles bounded conversation history, memory references, enabled Skills, and visible capabilities, it persists a context manifest and a chronological event trace. The trace records Run start, context compilation, requested and completed tools, runtime outcome, and terminal status. It stores capability names and safe summaries rather than duplicating raw conversation, credentials, or tool payloads.
+
+```text
+chat turn
+-> context manifest and fixed capability grant
+-> AgentRun started
+-> runtime / Skill / MCP tool requests
+-> tool completion events and capability audit
+-> runtime result
+-> completed, degraded, or failed AgentRun
+```
+
+Runs are retained locally in SQLite and exposed through the read-only Agent Runs viewer. This provides a focused debugging and interview surface for inspecting what the runtime was allowed to see, which tools it tried, and why a turn degraded, without granting a runtime ownership of tool execution or persistence.
+
 ## Workspace
 
 - `apps/api`: NestJS gateway and control plane.

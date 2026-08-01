@@ -14,7 +14,7 @@ export class SettingsService {
 
   private settings: AppSettings = {
     llmProvider: "pi",
-    model: process.env.PI_MODEL_ID || process.env.PI_SILICONFLOW_MODEL || "deepseek-ai/DeepSeek-V4-Flash",
+    model: process.env.LLM_MODEL || process.env.PI_MODEL_ID || "deepseek-v4-flash",
     dataRetentionDays: 365
   };
 
@@ -38,25 +38,27 @@ export class SettingsService {
             "AGENT_RUNTIME_PROVIDER",
             "PI_MODEL_PROVIDER",
             "PI_MODEL_ID",
-            "SILICONFLOW_API_KEY",
-            "SILICONFLOW_BASE_URL",
+            "LLM_BASE_URL",
+            "LLM_MODEL",
+            "LLM_API_KEY",
             "PI_AGENT_RUNTIME_TIMEOUT_MS",
             "PI_THINKING_LEVEL",
             "PI_WORKING_DIR"
           ],
           envTemplate: [
             "AGENT_RUNTIME_PROVIDER=pi",
-            "PI_MODEL_PROVIDER=siliconflow",
-            "PI_MODEL_ID=deepseek-ai/DeepSeek-V4-Flash",
-            "SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1",
-            "SILICONFLOW_API_KEY=",
+            "PI_MODEL_PROVIDER=deepseek",
+            "PI_MODEL_ID=deepseek-v4-flash",
+            "LLM_BASE_URL=https://api.deepseek.com",
+            "LLM_MODEL=deepseek-v4-flash",
+            "LLM_API_KEY=",
             "PI_AGENT_RUNTIME_TIMEOUT_MS=120000",
             "PI_THINKING_LEVEL=off",
             "PI_WORKING_DIR="
           ].join("\n"),
           action: piRuntime.reachable
             ? "Runtime adapter is ready."
-            : "Fill SILICONFLOW_API_KEY, then restart the API.",
+            : "Fill LLM_API_KEY, then restart the API.",
           docsHint: piRuntime.degradedReason
         },
         {

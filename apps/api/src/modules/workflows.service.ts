@@ -212,7 +212,7 @@ export class WorkflowsService {
       }
       if ((workflow.checkpoint?.nodeId ?? "") === "inspector") {
         // Independent reads are parallel, while all writes remain serial through the executor.
-        const inspected = await Promise.all(input.files.map((path) => this.workspace.read(path, 200_000)));
+        const inspected = await Promise.all(input.files.map((path) => this.workspace.read(path, 0, 200_000)));
         const inspectedBytes = inspected.reduce((total, item) => total + item.size, 0);
         if (inspectedBytes > MAX_INSPECTION_BYTES) {
           throw new Error(`Inspector budget exceeded: ${inspectedBytes} bytes exceeds ${MAX_INSPECTION_BYTES} bytes.`);

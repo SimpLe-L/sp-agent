@@ -182,7 +182,7 @@ export class ExtensionsService {
       {
         extensionId: "local.workspace",
         capabilityId: "workspace.read_file",
-        handle: async (request, audit) => { const input = workspaceReadFileSchema.parse(request.input); return this.completed("local.workspace", "workspace.read_file", audit, await this.workspaceService.read(input.path, input.maxBytes)); }
+        handle: async (request, audit) => { const input = workspaceReadFileSchema.parse(request.input); return this.completed("local.workspace", "workspace.read_file", audit, await this.workspaceService.read(input.path, input.offsetBytes, input.maxBytes)); }
       },
       {
         extensionId: "local.workspace",

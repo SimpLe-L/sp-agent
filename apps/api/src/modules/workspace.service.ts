@@ -18,13 +18,26 @@ export class WorkspaceService {
     return { root, path: this.relativePath(root, directory), entries, truncated: entries.length >= limit };
   }
 
-  async read(path: string, maxBytes: number) {
+  async read(path: string, offsetBytes: number, maxBytes: number) {
     const root = await this.workspaceRoot();
     const file = await this.resolveExisting(path, root, false);
     const stat = await lstat(file);
     if (!stat.isFile()) throw new BadRequestException("Workspace path must be a regular file.");
-    if (stat.size > Math.min(maxBytes, MAX_FILE_BYTES)) throw new BadRequestException("Workspace file exceeds the configured read limit.");
-    return { path: this.relativePath(root, file), content: await readFile(file, "utf8"), size: stat.size };
+    if (stat.size > MAX_FILE_BYTES) throw new BadRequestException("Workspace file exceeds the configured read limit.");
+    if (offsetBytes >= stat.size) {
+      return { path: this.relativePath(root, file), content: "", size: stat.size, offsetBytes, bytesRead: 0, truncated: false };
+    }
+    const content = await readFile(file);
+    const end = Math.min(offsetBytes + Math.min(maxBytes, MAX_FILE_BYTES), content.byteLength);
+    return {
+      path: this.relativePath(root, file),
+      content: content.subarray(offsetBytes, end).toString("utf8"),
+      size: stat.size,
+      offsetBytes,
+      bytesRead: end - offsetBytes,
+      truncated: end < content.byteLength,
+      nextOffsetBytes: end < content.byteLength ? end : undefined
+    };
   }
 
   async search(query: string, path: string, maxResults: number) {
